@@ -1093,13 +1093,15 @@ get_bridge_line() {
     local raw
     raw=$(docker exec "$cname" cat /var/lib/tor/pt_state/obfs4_bridgeline.txt 2>/dev/null | grep -v '^#' | head -1)
     if [ -n "$raw" ]; then
-        # Replace placeholders with real IP and port
+        # Replace placeholders with real IP, port, and fingerprint
         local ip
         ip=$(_get_external_ip)
-        local orport=$(get_container_orport "$idx")
+        local ptport=$(get_container_ptport "$idx")
+        local fp=$(get_tor_fingerprint "$idx")
         if [ -n "$ip" ]; then
             raw="${raw/<IP ADDRESS>/$ip}"
-            raw="${raw/<PORT>/$orport}"
+            raw="${raw/<PORT>/$ptport}"
+            raw="${raw/<FINGERPRINT>/$fp}"
         fi
         echo "$raw"
     fi
