@@ -87,8 +87,8 @@ SNOWFLAKE_CONTAINER="snowflake-proxy"
 SNOWFLAKE_VOLUME="snowflake-data"
 SNOWFLAKE_METRICS_PORT=9999
 SNOWFLAKE_PORT_RANGE="30000:60000"
-SNOWFLAKE_CPUS="1.0"
-SNOWFLAKE_MEMORY="256m"
+SNOWFLAKE_CPUS="1.5"
+SNOWFLAKE_MEMORY="512m"
 
 # Colors — disable when stdout is not a terminal
 if [ -t 1 ]; then
@@ -2893,7 +2893,10 @@ show_dashboard() {
                     local wb=$(echo "$result" | sed -n 's/.*traffic\/written=\([0-9]*\).*/\1/p' | head -1 2>/dev/null || echo "0")
                     local circuits=$(echo "$result" | grep -cE '^[0-9]+ (BUILT|EXTENDED|LAUNCHED)' 2>/dev/null || echo "0")
                     local conns=$(echo "$result" | grep -c '\$' 2>/dev/null || echo "0")
-                    rb=${rb:-0}; wb=${wb:-0}; circuits=${circuits:-0}; conns=${conns:-0}
+                    rb=${rb//[^0-9]/}; rb=${rb:-0}
+                    wb=${wb//[^0-9]/}; wb=${wb:-0}
+                    circuits=${circuits//[^0-9]/}; circuits=${circuits:-0}
+                    conns=${conns//[^0-9]/}; conns=${conns:-0}
 
                     echo "$running $rb $wb $circuits $conns $start_epoch" > "$_tmpdir/c_${i}"
                 else
@@ -2927,6 +2930,15 @@ show_dashboard() {
                 fi
             fi
         done
+
+        # Include snowflake in totals
+        if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running 2>/dev/null; then
+            local _sf_stats=$(get_snowflake_stats 2>/dev/null)
+            local _sf_in=$(echo "$_sf_stats" | awk '{print $2}'); _sf_in=${_sf_in:-0}
+            local _sf_out=$(echo "$_sf_stats" | awk '{print $3}'); _sf_out=${_sf_out:-0}
+            total_read=$((total_read + _sf_in))
+            total_written=$((total_written + _sf_out))
+        fi
 
         local uptime_str="N/A"
         if [ "$earliest_start" -gt 0 ]; then
