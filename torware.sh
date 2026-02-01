@@ -1091,7 +1091,7 @@ get_bridge_line() {
     local idx=$1
     local cname=$(get_container_name $idx)
     local raw
-    raw=$(docker exec "$cname" cat /var/lib/tor/pt_state/obfs4_bridgeline.txt 2>/dev/null | grep -v '^#' | head -1)
+    raw=$(docker exec "$cname" cat /var/lib/tor/pt_state/obfs4_bridgeline.txt 2>/dev/null | grep -vE '^#|^$' | head -1)
     if [ -n "$raw" ]; then
         # Replace placeholders with real IP, port, and fingerprint
         local ip
