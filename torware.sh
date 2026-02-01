@@ -1988,7 +1988,7 @@ run_snowflake_container() {
         --restart unless-stopped \
         --log-opt max-size=10m \
         --log-opt max-file=3 \
-        --cpus "${SNOWFLAKE_CPUS:-1.0}" \
+        --cpus "$(awk -v req="${SNOWFLAKE_CPUS:-1.0}" -v cores="$(nproc 2>/dev/null || echo 1)" 'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')" \
         --memory "${SNOWFLAKE_MEMORY:-256m}" \
         --network host \
         -v "${SNOWFLAKE_VOLUME}:/var/lib/snowflake" \
