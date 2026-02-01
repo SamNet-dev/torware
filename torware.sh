@@ -1887,7 +1887,12 @@ run_all_containers() {
     # Start Snowflake proxy if enabled
     run_snowflake_container
 
-    sleep 5
+    local _retries=0
+    while [ $_retries -lt 3 ]; do
+        sleep 5
+        docker ps | grep -q "torware" && break
+        _retries=$((_retries + 1))
+    done
     if docker ps | grep -q "torware"; then
         local bw_display="$BANDWIDTH Mbps"
         [ "$BANDWIDTH" = "-1" ] && bw_display="Unlimited"
