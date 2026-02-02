@@ -1889,13 +1889,37 @@ run_all_containers() {
     # Start Snowflake proxy if enabled
     run_snowflake_container
 
+    # Wait for relay container to be running and bootstrapping
     local _retries=0
-    while [ $_retries -lt 3 ]; do
+    local _max_retries=12
+    local _relay_started=false
+    local _cname=$(get_container_name 1)
+    while [ $_retries -lt $_max_retries ]; do
         sleep 5
-        docker ps | grep -q "torware" && break
+        # Check if container is running or restarting
+        if docker ps -a --format '{{.Names}} {{.Status}}' | grep -q "^${_cname} "; then
+            local _status=$(docker ps -a --format '{{.Status}}' --filter "name=^${_cname}$" | head -1)
+            # Check logs for bootstrap progress
+            local _logs=$(docker logs "$_cname" 2>&1 | tail -20)
+            if echo "$_logs" | grep -q "Bootstrapped 100%"; then
+                _relay_started=true
+                break
+            elif echo "$_logs" | grep -q "Bootstrapped"; then
+                local _pct=$(echo "$_logs" | sed -n 's/.*Bootstrapped \([0-9]*\).*/\1/p' | tail -1)
+                log_info "Relay bootstrapping... ${_pct}%"
+            fi
+            # If container is running (not crashed), keep waiting
+            if docker ps --format '{{.Names}}' | grep -q "^${_cname}$"; then
+                : # still running, keep waiting
+            elif echo "$_status" | grep -qi "exited"; then
+                log_error "Tor relay container exited unexpectedly"
+                docker logs "$_cname" 2>&1 | tail -10
+                exit 1
+            fi
+        fi
         _retries=$((_retries + 1))
     done
-    if docker ps | grep -q "torware"; then
+    if [ "$_relay_started" = "true" ] || docker ps --format '{{.Names}}' | grep -q "^${_cname}$"; then
         local bw_display="$BANDWIDTH Mbps"
         [ "$BANDWIDTH" = "-1" ] && bw_display="Unlimited"
         log_success "Settings: default_type=$RELAY_TYPE, bandwidth=$bw_display, containers=$count"
@@ -1904,7 +1928,7 @@ run_all_containers() {
         fi
     else
         log_error "Tor relay failed to start"
-        docker logs "$(get_container_name 1)" 2>&1 | tail -10
+        docker logs "$_cname" 2>&1 | tail -10
         exit 1
     fi
 }
@@ -3299,6 +3323,32 @@ show_advanced_stats() {
 
         echo -e "${EL}"
 
+        # Snowflake detailed stats
+        if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+            echo -e "${CYAN}═══ Snowflake Proxy Details ═══${NC}${EL}"
+            local _adv_sf_country
+            _adv_sf_country=$(get_snowflake_country_stats 2>/dev/null)
+            if [ -n "$_adv_sf_country" ]; then
+                local _adv_sf_total=0
+                while IFS='|' read -r _asc _asco; do
+                    _adv_sf_total=$((_adv_sf_total + _asc))
+                done <<< "$_adv_sf_country"
+                [ "$_adv_sf_total" -eq 0 ] && _adv_sf_total=1
+
+                echo -e "  ${BOLD}Top 10 Countries by Connections${NC}${EL}"
+                printf "  ${BOLD}%-20s %8s %6s   %-20s${NC}${EL}\n" "Country" "Conns" "Pct" "Activity"
+                echo "$_adv_sf_country" | head -10 | while IFS='|' read -r _asc _asco; do
+                    [ -z "$_asco" ] && continue
+                    _asco=$(country_code_to_name "$_asco")
+                    local _aspct=$((_asc * 100 / _adv_sf_total))
+                    local _asbl=$((_aspct / 5)); [ "$_asbl" -lt 1 ] && _asbl=1; [ "$_asbl" -gt 20 ] && _asbl=20
+                    local _asbf=""; for ((_asi=0; _asi<_asbl; _asi++)); do _asbf+="█"; done
+                    printf "  %-20.20s %8s %5d%%   ${MAGENTA}%s${NC}${EL}\n" "$_asco" "$_asc" "$_aspct" "$_asbf"
+                done
+            fi
+            echo -e "${EL}"
+        fi
+
         # Country charts from tracker data
         local data_file="$STATS_DIR/cumulative_data"
         local ips_file="$STATS_DIR/cumulative_ips"
@@ -3458,15 +3508,28 @@ show_peers() {
                 done <<< "$snap_data"
                 [ "$total" -eq 0 ] && total=1
 
+                local _term_rows=$(tput lines 2>/dev/null || echo 24)
+                # Reserve rows for header(4) + snowflake section(~20) + footer(3)
+                local _max_countries=$((_term_rows - 27))
+                [ "$_max_countries" -lt 5 ] && _max_countries=5
+                [ "$_max_countries" -gt 30 ] && _max_countries=30
+
                 printf "  ${BOLD}%-20s %6s %8s   %-30s${NC}${EL}\n" "Country" "Traffic" "Pct" "Activity"
 
+                local _country_count=0
                 while IFS='|' read -r cnt country; do
                     [ -z "$country" ] && continue
+                    _country_count=$((_country_count + 1))
+                    [ "$_country_count" -gt "$_max_countries" ] && break
                     local pct=$((cnt * 100 / total))
                     local bl=$((pct / 5)); [ "$bl" -lt 1 ] && bl=1; [ "$bl" -gt 20 ] && bl=20
                     local bf=""; for ((bi=0; bi<bl; bi++)); do bf+="█"; done
                     printf "  %-20.20s %6s %7d%%   ${GREEN}%s${NC}${EL}\n" "$country" "$(format_bytes $cnt)" "$pct" "$bf"
                 done <<< "$snap_data"
+                local _total_countries=$(echo "$snap_data" | wc -l)
+                if [ "$_total_countries" -gt "$_max_countries" ]; then
+                    echo -e "  ${DIM}... and $((_total_countries - _max_countries)) more countries${NC}${EL}"
+                fi
             else
                 echo -e "  ${DIM}No circuit or client data available yet.${NC}${EL}"
             fi
