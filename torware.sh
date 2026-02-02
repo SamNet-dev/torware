@@ -83,12 +83,17 @@ DATA_CAP_GB=0
 
 # Snowflake proxy settings
 SNOWFLAKE_ENABLED="false"
+SNOWFLAKE_COUNT=1
 SNOWFLAKE_CONTAINER="snowflake-proxy"
 SNOWFLAKE_VOLUME="snowflake-data"
 SNOWFLAKE_METRICS_PORT=9999
 SNOWFLAKE_PORT_RANGE="30000:60000"
 SNOWFLAKE_CPUS="1.5"
 SNOWFLAKE_MEMORY="512m"
+SNOWFLAKE_CPUS_1=""
+SNOWFLAKE_MEMORY_1=""
+SNOWFLAKE_CPUS_2=""
+SNOWFLAKE_MEMORY_2=""
 
 # Colors — disable when stdout is not a terminal
 if [ -t 1 ]; then
@@ -646,6 +651,69 @@ get_volume_name() {
     echo "relay-data-${idx}"
 }
 
+get_snowflake_name() {
+    local idx=$1
+    if [ "$idx" -le 1 ] 2>/dev/null; then
+        echo "snowflake-proxy"
+    else
+        echo "snowflake-proxy-${idx}"
+    fi
+}
+
+get_snowflake_volume() {
+    local idx=$1
+    if [ "$idx" -le 1 ] 2>/dev/null; then
+        echo "snowflake-data"
+    else
+        echo "snowflake-data-${idx}"
+    fi
+}
+
+get_snowflake_metrics_port() {
+    local idx=$1
+    echo $((10000 - idx))
+}
+
+get_snowflake_cpus() {
+    local idx=$1
+    local var="SNOWFLAKE_CPUS_${idx}"
+    local val="${!var}"
+    if [ -n "$val" ]; then
+        echo "$val"
+    else
+        echo "${SNOWFLAKE_CPUS:-1.5}"
+    fi
+}
+
+get_snowflake_memory() {
+    local idx=$1
+    local var="SNOWFLAKE_MEMORY_${idx}"
+    local val="${!var}"
+    if [ -n "$val" ]; then
+        echo "$val"
+    else
+        echo "${SNOWFLAKE_MEMORY:-512m}"
+    fi
+}
+
+get_snowflake_default_cpus() {
+    local cores=$(nproc 2>/dev/null || echo 1)
+    if [ "$cores" -ge 2 ]; then
+        echo "1.5"
+    else
+        echo "1.0"
+    fi
+}
+
+get_snowflake_default_memory() {
+    local total_mb=$(awk '/MemTotal/ {printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
+    if [ "$total_mb" -ge 3500 ]; then
+        echo "1g"
+    else
+        echo "512m"
+    fi
+}
+
 get_container_orport() {
     local idx=$1
     local var="ORPORT_${idx}"
@@ -1163,6 +1231,8 @@ prompt_relay_settings() {
     # ── Suggested Setup Modes ──
     echo -e "  ${BOLD}Choose a Setup Mode:${NC}"
     echo ""
+    echo -e "  ${DIM}Options 1-4 include the option to run Snowflake alongside your relay.${NC}"
+    echo ""
     echo -e "  ${GREEN}${BOLD}  1. Single Bridge${NC} (${BOLD}RECOMMENDED${NC})"
     echo -e "       1 obfs4 bridge container — ideal for most users"
     echo -e "       Helps censored users connect to Tor"
@@ -1185,9 +1255,14 @@ prompt_relay_settings() {
     echo -e "       Choose relay type and container count manually"
     echo -e "       Includes exit relay option (advanced, legal risks)"
     echo ""
+    echo -e "  ${CYAN}  5. Snowflake Only${NC}"
+    echo -e "       No Tor relay — just run Snowflake WebRTC proxy"
+    echo -e "       Helps censored users connect to Tor"
+    echo -e "       Lightweight, no IP exposure, zero config"
+    echo ""
 
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
-    echo -e "  Choose setup mode [1-4] (default: 1)"
+    echo -e "  Choose setup mode [1-5] (default: 1)"
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     read -p "  mode: " input_mode < /dev/tty || true
 
@@ -1292,12 +1367,52 @@ prompt_relay_settings() {
             esac
             # Custom mode: skip to container count below (handled after this case)
             ;;
+        5)
+            # Snowflake-only mode: no Tor relay
+            RELAY_TYPE="none"
+            CONTAINER_COUNT=0
+            SNOWFLAKE_ENABLED="true"
+            echo -e "  Selected: ${CYAN}Snowflake Only${NC} (no Tor relay)"
+            echo ""
+            echo -e "  ${DIM}You can run up to 2 Snowflake instances. Each registers${NC}"
+            echo -e "  ${DIM}independently with the broker for more client assignments.${NC}"
+            read -p "  Number of Snowflake instances (1-2) [1]: " _sf_count < /dev/tty || true
+            if [ "$_sf_count" = "2" ]; then
+                SNOWFLAKE_COUNT=2
+            else
+                SNOWFLAKE_COUNT=1
+            fi
+            local _def_cpu=$(get_snowflake_default_cpus)
+            local _def_mem=$(get_snowflake_default_memory)
+            for _si in $(seq 1 $SNOWFLAKE_COUNT); do
+                echo ""
+                if [ "$SNOWFLAKE_COUNT" -gt 1 ]; then
+                    echo -e "  ${BOLD}Instance #${_si}:${NC}"
+                fi
+                read -p "  CPU cores [${_def_cpu}]: " _sf_cpu < /dev/tty || true
+                read -p "  RAM limit [${_def_mem}]: " _sf_mem < /dev/tty || true
+                [ -z "$_sf_cpu" ] && _sf_cpu="$_def_cpu"
+                [ -z "$_sf_mem" ] && _sf_mem="$_def_mem"
+                [[ "$_sf_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _sf_cpu="$_def_cpu"
+                [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]] || _sf_mem="$_def_mem"
+                _sf_mem=$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')
+                eval "SNOWFLAKE_CPUS_${_si}=\"$_sf_cpu\""
+                eval "SNOWFLAKE_MEMORY_${_si}=\"$_sf_mem\""
+            done
+            echo -e "  Snowflake: ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
+            ;;
         *)
             RELAY_TYPE="bridge"
             CONTAINER_COUNT=1
             echo -e "  Invalid input. Defaulting to: ${GREEN}Single Bridge (obfs4)${NC}"
             ;;
     esac
+
+    # Skip relay config for snowflake-only mode
+    if [ "$RELAY_TYPE" = "none" ]; then
+        # Jump to summary confirmation
+        :
+    else
 
     # ── Container Count (custom mode only — modes 1-3 already set CONTAINER_COUNT) ──
     if [ "${input_mode:-1}" = "4" ] && [ "${_custom_needs_count:-false}" = "true" ]; then
@@ -1490,7 +1605,36 @@ prompt_relay_settings() {
     else
         SNOWFLAKE_ENABLED="true"
         echo -e "  Snowflake: ${GREEN}Enabled${NC}"
+        echo ""
+        echo -e "  ${DIM}You can run up to 2 Snowflake instances. Each registers${NC}"
+        echo -e "  ${DIM}independently with the broker for more client assignments.${NC}"
+        read -p "  Number of Snowflake instances (1-2) [1]: " _sf_count < /dev/tty || true
+        if [ "$_sf_count" = "2" ]; then
+            SNOWFLAKE_COUNT=2
+        else
+            SNOWFLAKE_COUNT=1
+        fi
+        local _def_cpu=$(get_snowflake_default_cpus)
+        local _def_mem=$(get_snowflake_default_memory)
+        for _si in $(seq 1 $SNOWFLAKE_COUNT); do
+            echo ""
+            if [ "$SNOWFLAKE_COUNT" -gt 1 ]; then
+                echo -e "  ${BOLD}Instance #${_si}:${NC}"
+            fi
+            read -p "  CPU cores [${_def_cpu}]: " _sf_cpu < /dev/tty || true
+            read -p "  RAM limit [${_def_mem}]: " _sf_mem < /dev/tty || true
+            [ -z "$_sf_cpu" ] && _sf_cpu="$_def_cpu"
+            [ -z "$_sf_mem" ] && _sf_mem="$_def_mem"
+            [[ "$_sf_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _sf_cpu="$_def_cpu"
+            [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]] || _sf_mem="$_def_mem"
+            _sf_mem=$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')
+            eval "SNOWFLAKE_CPUS_${_si}=\"$_sf_cpu\""
+            eval "SNOWFLAKE_MEMORY_${_si}=\"$_sf_mem\""
+        done
+        echo -e "  Snowflake: ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
     fi
+
+    fi # end of relay-type != none block
 
     echo ""
 
@@ -1499,59 +1643,68 @@ prompt_relay_settings() {
     echo -e "  ${BOLD}Your Settings:${NC}"
     # Show per-container types if mixed
     local has_mixed=false
-    if [ "$CONTAINER_COUNT" -gt 1 ]; then
+    if [ "${CONTAINER_COUNT:-0}" -gt 1 ]; then
         for _ci in $(seq 1 $CONTAINER_COUNT); do
             local _rt=$(get_container_relay_type $_ci)
             [ "$_rt" != "$RELAY_TYPE" ] && has_mixed=true
         done
     fi
-    if [ "$has_mixed" = "true" ]; then
-        echo -e "    Relay Types:"
-        for _ci in $(seq 1 $CONTAINER_COUNT); do
-            echo -e "      Container $_ci: ${GREEN}$(get_container_relay_type $_ci)${NC}"
+    if [ "$RELAY_TYPE" = "none" ]; then
+        echo -e "    Mode:        ${CYAN}Snowflake Only${NC}"
+        echo -e "    Snowflake:   ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
+        for _si in $(seq 1 ${SNOWFLAKE_COUNT}); do
+            echo -e "      Instance #${_si}: CPU $(get_snowflake_cpus $_si), RAM $(get_snowflake_memory $_si)"
         done
     else
-        echo -e "    Relay Type:  ${GREEN}${RELAY_TYPE}${NC}"
-    fi
-    echo -e "    Nickname:    ${GREEN}${NICKNAME}${NC}"
-    echo -e "    Contact:     ${GREEN}${CONTACT_INFO}${NC}"
-    if [ "$BANDWIDTH" = "-1" ]; then
-        echo -e "    Bandwidth:   ${GREEN}Unlimited${NC}"
-    else
-        echo -e "    Bandwidth:   ${GREEN}${BANDWIDTH}${NC} Mbps"
-    fi
-    echo -e "    Containers:  ${GREEN}${CONTAINER_COUNT}${NC}"
-    if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
-        echo -e "    Data Cap:    ${GREEN}${DATA_CAP_GB} GB/month${NC}"
-    else
-        echo -e "    Data Cap:    ${GREEN}Unlimited${NC}"
-    fi
-    echo -e "    ORPorts:     ${GREEN}${ORPORT_BASE}-$((ORPORT_BASE + CONTAINER_COUNT - 1))${NC}"
-    # Show obfs4 ports only for bridge containers
-    local _has_bridge=false
-    for _ci in $(seq 1 $CONTAINER_COUNT); do
-        [ "$(get_container_relay_type $_ci)" = "bridge" ] && _has_bridge=true
-    done
-    if [ "$_has_bridge" = "true" ]; then
-        # Show only bridge container obfs4 ports
-        local _bridge_ports=""
+        if [ "$has_mixed" = "true" ]; then
+            echo -e "    Relay Types:"
+            for _ci in $(seq 1 $CONTAINER_COUNT); do
+                echo -e "      Container $_ci: ${GREEN}$(get_container_relay_type $_ci)${NC}"
+            done
+        else
+            echo -e "    Relay Type:  ${GREEN}${RELAY_TYPE}${NC}"
+        fi
+        echo -e "    Nickname:    ${GREEN}${NICKNAME}${NC}"
+        echo -e "    Contact:     ${GREEN}${CONTACT_INFO}${NC}"
+        if [ "$BANDWIDTH" = "-1" ]; then
+            echo -e "    Bandwidth:   ${GREEN}Unlimited${NC}"
+        else
+            echo -e "    Bandwidth:   ${GREEN}${BANDWIDTH}${NC} Mbps"
+        fi
+        echo -e "    Containers:  ${GREEN}${CONTAINER_COUNT}${NC}"
+        if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+            echo -e "    Data Cap:    ${GREEN}${DATA_CAP_GB} GB/month${NC}"
+        else
+            echo -e "    Data Cap:    ${GREEN}Unlimited${NC}"
+        fi
+        echo -e "    ORPorts:     ${GREEN}${ORPORT_BASE}-$((ORPORT_BASE + CONTAINER_COUNT - 1))${NC}"
+        # Show obfs4 ports only for bridge containers
+        local _has_bridge=false
         for _ci in $(seq 1 $CONTAINER_COUNT); do
-            if [ "$(get_container_relay_type $_ci)" = "bridge" ]; then
-                local _pp=$(get_container_ptport $_ci)
-                if [ -z "$_bridge_ports" ]; then _bridge_ports="$_pp"; else _bridge_ports="${_bridge_ports}, ${_pp}"; fi
-            fi
+            [ "$(get_container_relay_type $_ci)" = "bridge" ] && _has_bridge=true
         done
-        echo -e "    obfs4 Ports: ${GREEN}${_bridge_ports}${NC}"
+        if [ "$_has_bridge" = "true" ]; then
+            local _bridge_ports=""
+            for _ci in $(seq 1 $CONTAINER_COUNT); do
+                if [ "$(get_container_relay_type $_ci)" = "bridge" ]; then
+                    local _pp=$(get_container_ptport $_ci)
+                    if [ -z "$_bridge_ports" ]; then _bridge_ports="$_pp"; else _bridge_ports="${_bridge_ports}, ${_pp}"; fi
+                fi
+            done
+            echo -e "    obfs4 Ports: ${GREEN}${_bridge_ports}${NC}"
+        fi
+        if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+            echo -e "    Snowflake:   ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
+        fi
     fi
-    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
-        echo -e "    Snowflake:   ${GREEN}Enabled (WebRTC proxy, 0.5 CPU / 128MB)${NC}"
+    # Show auto-calculated resource limits (only for relay modes)
+    if [ "${CONTAINER_COUNT:-0}" -gt 0 ]; then
+        local _sys_cores=$(get_cpu_cores)
+        local _sys_ram=$(get_ram_mb)
+        local _per_cpu=$(awk -v c="$_sys_cores" -v n="$CONTAINER_COUNT" 'BEGIN {v=(c>1)?(c-1)/n:0.5; if(v<0.5)v=0.5; printf "%.1f",v}')
+        local _per_ram=$(awk -v r="$_sys_ram" -v n="$CONTAINER_COUNT" 'BEGIN {v=(r-512)/n; if(v<256)v=256; if(v>2048)v=2048; printf "%.0f",v}')
+        echo -e "    Resources:   ${GREEN}${_per_cpu} CPU / ${_per_ram}MB RAM${NC} per relay container"
     fi
-    # Show auto-calculated resource limits
-    local _sys_cores=$(get_cpu_cores)
-    local _sys_ram=$(get_ram_mb)
-    local _per_cpu=$(awk -v c="$_sys_cores" -v n="$CONTAINER_COUNT" 'BEGIN {v=(c>1)?(c-1)/n:0.5; if(v<0.5)v=0.5; printf "%.1f",v}')
-    local _per_ram=$(awk -v r="$_sys_ram" -v n="$CONTAINER_COUNT" 'BEGIN {v=(r-512)/n; if(v<256)v=256; if(v>2048)v=2048; printf "%.0f",v}')
-    echo -e "    Resources:   ${GREEN}${_per_cpu} CPU / ${_per_ram}MB RAM${NC} per relay container"
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     echo ""
 
@@ -1573,8 +1726,17 @@ save_settings() {
     _tmp=$(mktemp "$INSTALL_DIR/settings.conf.XXXXXX") || { log_error "Failed to create temp file"; return 1; }
     _TMP_FILES+=("$_tmp")
 
+    # Capture current globals BEFORE load_settings overwrites them
+    local _caller_snowflake_count="${SNOWFLAKE_COUNT:-1}"
+    local _caller_snowflake_cpus_1="${SNOWFLAKE_CPUS_1:-}"
+    local _caller_snowflake_memory_1="${SNOWFLAKE_MEMORY_1:-}"
+    local _caller_snowflake_cpus_2="${SNOWFLAKE_CPUS_2:-}"
+    local _caller_snowflake_memory_2="${SNOWFLAKE_MEMORY_2:-}"
+    local _caller_snowflake_enabled="${SNOWFLAKE_ENABLED:-false}"
+    local _caller_snowflake_cpus="${SNOWFLAKE_CPUS:-1.0}"
+    local _caller_snowflake_memory="${SNOWFLAKE_MEMORY:-256m}"
+
     # Preserve existing Telegram settings on reinstall
-    # Capture current telegram globals BEFORE load_settings overwrites them
     local _caller_tg_token="${TELEGRAM_BOT_TOKEN:-}"
     local _caller_tg_chat="${TELEGRAM_CHAT_ID:-}"
     local _caller_tg_interval="${TELEGRAM_INTERVAL:-6}"
@@ -1610,6 +1772,16 @@ save_settings() {
     _tg_weekly="$_caller_tg_weekly"
     _tg_label="$_caller_tg_label"
     _tg_start_hour="$_caller_tg_start_hour"
+
+    # Restore snowflake globals after load_settings clobbered them
+    SNOWFLAKE_COUNT="$_caller_snowflake_count"
+    SNOWFLAKE_ENABLED="$_caller_snowflake_enabled"
+    SNOWFLAKE_CPUS="$_caller_snowflake_cpus"
+    SNOWFLAKE_MEMORY="$_caller_snowflake_memory"
+    SNOWFLAKE_CPUS_1="$_caller_snowflake_cpus_1"
+    SNOWFLAKE_MEMORY_1="$_caller_snowflake_memory_1"
+    SNOWFLAKE_CPUS_2="$_caller_snowflake_cpus_2"
+    SNOWFLAKE_MEMORY_2="$_caller_snowflake_memory_2"
 
     # Restore ALL telegram globals after load_settings clobbered them
     TELEGRAM_BOT_TOKEN="$_tg_token"
@@ -1652,9 +1824,14 @@ DATA_CAP_GB='${DATA_CAP_GB:-0}'
 
 # Snowflake Proxy
 SNOWFLAKE_ENABLED='${SNOWFLAKE_ENABLED:-false}'
+SNOWFLAKE_COUNT='${SNOWFLAKE_COUNT:-1}'
 SNOWFLAKE_PORT_RANGE='${SNOWFLAKE_PORT_RANGE:-30000:60000}'
 SNOWFLAKE_CPUS='${SNOWFLAKE_CPUS:-1.0}'
 SNOWFLAKE_MEMORY='${SNOWFLAKE_MEMORY:-256m}'
+SNOWFLAKE_CPUS_1='${SNOWFLAKE_CPUS_1}'
+SNOWFLAKE_MEMORY_1='${SNOWFLAKE_MEMORY_1}'
+SNOWFLAKE_CPUS_2='${SNOWFLAKE_CPUS_2}'
+SNOWFLAKE_MEMORY_2='${SNOWFLAKE_MEMORY_2}'
 
 # Telegram Integration
 TELEGRAM_BOT_TOKEN='${_safe_tg_token}'
@@ -1855,6 +2032,19 @@ run_relay_container() {
 run_all_containers() {
     local count=${CONTAINER_COUNT:-1}
 
+    # Snowflake-only mode: skip relay containers entirely
+    if [ "$count" -le 0 ] 2>/dev/null || [ "$RELAY_TYPE" = "none" ]; then
+        log_info "Starting Torware (Snowflake only)..."
+        run_all_snowflake_containers
+        if is_snowflake_running; then
+            log_success "Snowflake proxy started (${SNOWFLAKE_COUNT:-1} instance(s))"
+        else
+            log_error "Snowflake proxy failed to start"
+            exit 1
+        fi
+        return 0
+    fi
+
     log_info "Starting Torware ($count container(s))..."
 
     # Pull required images (may need both bridge and relay images for mixed types)
@@ -1887,7 +2077,7 @@ run_all_containers() {
     done
 
     # Start Snowflake proxy if enabled
-    run_snowflake_container
+    run_all_snowflake_containers
 
     # Wait for relay container to be running and bootstrapping
     local _retries=0
@@ -1948,7 +2138,6 @@ start_relay() {
             run_relay_container $i
         fi
     done
-    start_snowflake_container
 }
 
 stop_relay() {
@@ -1960,7 +2149,6 @@ stop_relay() {
             log_success "$cname stopped"
         fi
     done
-    stop_snowflake_container
 }
 
 restart_relay() {
@@ -1982,7 +2170,6 @@ restart_relay() {
 
         run_relay_container $i
     done
-    restart_snowflake_container
 }
 
 #═══════════════════════════════════════════════════════════════════════
@@ -1990,89 +2177,167 @@ restart_relay() {
 #═══════════════════════════════════════════════════════════════════════
 
 run_snowflake_container() {
+    local idx=${1:-1}
     if [ "$SNOWFLAKE_ENABLED" != "true" ]; then
         return 0
     fi
 
-    log_info "Starting Snowflake proxy..."
+    local cname=$(get_snowflake_name $idx)
+    local vname=$(get_snowflake_volume $idx)
+    local mport=$(get_snowflake_metrics_port $idx)
+    local sf_cpus=$(get_snowflake_cpus $idx)
+    local sf_memory=$(get_snowflake_memory $idx)
 
-    # Pull image
+    log_info "Starting Snowflake proxy ($cname)..."
+
+    # Pull image if not already cached locally
+    if ! docker image inspect "$SNOWFLAKE_IMAGE" &>/dev/null; then
+        if ! docker pull "$SNOWFLAKE_IMAGE"; then
+            log_error "Failed to pull Snowflake image."
+            return 1
+        fi
+    fi
+
+    # Remove existing
+    docker rm -f "$cname" 2>/dev/null || true
+
+    # Ensure volume exists for data persistence
+    docker volume create "$vname" 2>/dev/null || true
+
+    if ! docker run -d \
+        --name "$cname" \
+        --restart unless-stopped \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        --cpus "$(awk -v req="${sf_cpus}" -v cores="$(nproc 2>/dev/null || echo 1)" 'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')" \
+        --memory "${sf_memory}" \
+        --memory-swap "${sf_memory}" \
+        --network host \
+        --health-cmd "wget -q -O /dev/null http://127.0.0.1:${mport}/ || exit 1" \
+        --health-interval=300s \
+        --health-timeout=10s \
+        --health-retries=5 \
+        --health-start-period=3600s \
+        -v "${vname}:/var/lib/snowflake" \
+        "$SNOWFLAKE_IMAGE" \
+        -metrics -metrics-address "127.0.0.1" -metrics-port "${mport}"; then
+        log_error "Failed to start Snowflake proxy ($cname)"
+        return 1
+    fi
+    log_success "Snowflake proxy started: $cname (metrics on port $mport)"
+}
+
+run_all_snowflake_containers() {
+    if [ "$SNOWFLAKE_ENABLED" != "true" ]; then
+        return 0
+    fi
+    # Pull image once
     if ! docker pull "$SNOWFLAKE_IMAGE"; then
         log_error "Failed to pull Snowflake image."
         return 1
     fi
-
-    # Remove existing
-    docker rm -f "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
-
-    # Ensure volume exists for data persistence
-    docker volume create "$SNOWFLAKE_VOLUME" 2>/dev/null || true
-
-    # Validate port range format
-    if ! [[ "$SNOWFLAKE_PORT_RANGE" =~ ^[0-9]+:[0-9]+$ ]]; then
-        log_error "Invalid SNOWFLAKE_PORT_RANGE format: $SNOWFLAKE_PORT_RANGE (expected START:END)"
-        return 1
-    fi
-
-    if ! docker run -d \
-        --name "$SNOWFLAKE_CONTAINER" \
-        --restart unless-stopped \
-        --log-opt max-size=10m \
-        --log-opt max-file=3 \
-        --cpus "$(awk -v req="${SNOWFLAKE_CPUS:-1.0}" -v cores="$(nproc 2>/dev/null || echo 1)" 'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')" \
-        --memory "${SNOWFLAKE_MEMORY:-256m}" \
-        --network host \
-        -v "${SNOWFLAKE_VOLUME}:/var/lib/snowflake" \
-        "$SNOWFLAKE_IMAGE" \
-        -metrics \
-        -ephemeral-ports-range "$SNOWFLAKE_PORT_RANGE"; then
-        log_error "Failed to start Snowflake proxy"
-        return 1
-    fi
-    log_success "Snowflake proxy started (metrics on port $SNOWFLAKE_METRICS_PORT)"
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        run_snowflake_container $i
+    done
 }
 
 stop_snowflake_container() {
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${SNOWFLAKE_CONTAINER}$"; then
-        docker stop --timeout 10 "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
-        log_success "Snowflake proxy stopped"
-    fi
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+            docker stop --timeout 10 "$cname" 2>/dev/null || true
+            log_success "$cname stopped"
+        fi
+    done
 }
 
 start_snowflake_container() {
     if [ "$SNOWFLAKE_ENABLED" != "true" ]; then
         return 0
     fi
-    if docker ps -a --format '{{.Names}}' | grep -q "^${SNOWFLAKE_CONTAINER}$"; then
-        if docker start "$SNOWFLAKE_CONTAINER" 2>/dev/null; then
-            log_success "Snowflake proxy started"
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
+            if docker start "$cname" 2>/dev/null; then
+                log_success "$cname started"
+            else
+                log_warn "Failed to start $cname, recreating..."
+                run_snowflake_container $i
+            fi
         else
-            log_warn "Failed to start Snowflake, recreating..."
-            run_snowflake_container
+            run_snowflake_container $i
         fi
-    else
-        run_snowflake_container
-    fi
+    done
 }
 
 restart_snowflake_container() {
     if [ "$SNOWFLAKE_ENABLED" != "true" ]; then
         return 0
     fi
-    docker rm -f "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
-    run_snowflake_container
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        docker rm -f "$cname" 2>/dev/null || true
+        run_snowflake_container $i
+    done
 }
 
 is_snowflake_running() {
-    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${SNOWFLAKE_CONTAINER}$"
+    # Returns true if at least one snowflake instance is running
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 get_snowflake_stats() {
-    # Get connections from Prometheus metrics (accurate per-country counts)
-    local metrics=""
-    metrics=$(curl -s --max-time 3 "http://127.0.0.1:${SNOWFLAKE_METRICS_PORT}/internal/metrics" 2>/dev/null)
+    # Aggregate stats across all snowflake instances
+    local total_connections=0 total_inbound=0 total_outbound=0
 
-    local connections=0
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        local mport=$(get_snowflake_metrics_port $i)
+
+        # Get connections from Prometheus metrics
+        local metrics=""
+        metrics=$(curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null)
+        if [ -n "$metrics" ]; then
+            local conns=$(echo "$metrics" | awk '
+                /^tor_snowflake_proxy_connections_total[{ ]/ { sum += $NF }
+                END { printf "%.0f", sum }
+            ' 2>/dev/null)
+            total_connections=$((total_connections + ${conns:-0}))
+        fi
+
+        # Get cumulative traffic from docker logs
+        local log_data
+        log_data=$(docker logs "$cname" 2>&1 | grep "Traffic Relayed" 2>/dev/null)
+        if [ -n "$log_data" ]; then
+            local ib=$(echo "$log_data" | awk -F'[↓↑]' '{
+                split($2, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1]
+            } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
+            local ob=$(echo "$log_data" | awk -F'[↓↑]' '{
+                split($3, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1]
+            } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
+            total_inbound=$((total_inbound + ${ib:-0}))
+            total_outbound=$((total_outbound + ${ob:-0}))
+        fi
+    done
+
+    echo "${total_connections} ${total_inbound} ${total_outbound}"
+}
+
+get_snowflake_instance_stats() {
+    # Get stats for a single instance
+    local idx=${1:-1}
+    local cname=$(get_snowflake_name $idx)
+    local mport=$(get_snowflake_metrics_port $idx)
+
+    local connections=0 inbound=0 outbound=0
+    local metrics=""
+    metrics=$(curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null)
     if [ -n "$metrics" ]; then
         connections=$(echo "$metrics" | awk '
             /^tor_snowflake_proxy_connections_total[{ ]/ { sum += $NF }
@@ -2080,13 +2345,9 @@ get_snowflake_stats() {
         ' 2>/dev/null)
     fi
 
-    # Get cumulative traffic from docker logs (Prometheus metrics undercount)
-    # Logs contain: "Traffic Relayed ↓ XXXX KB (...), ↑ YYYY KB (...)"
-    local inbound=0 outbound=0
     local log_data
-    log_data=$(docker logs "$SNOWFLAKE_CONTAINER" 2>&1 | grep "Traffic Relayed" 2>/dev/null)
+    log_data=$(docker logs "$cname" 2>&1 | grep "Traffic Relayed" 2>/dev/null)
     if [ -n "$log_data" ]; then
-        # Sum all hourly inbound/outbound KB values, convert to bytes
         inbound=$(echo "$log_data" | awk -F'[↓↑]' '{
             split($2, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1]
         } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
@@ -2099,13 +2360,18 @@ get_snowflake_stats() {
 }
 
 get_snowflake_country_stats() {
-    # Return connections per country from Snowflake metrics
-    local metrics=""
-    metrics=$(curl -s --max-time 3 "http://127.0.0.1:${SNOWFLAKE_METRICS_PORT}/internal/metrics" 2>/dev/null) || return 1
+    # Aggregate country stats across all snowflake instances
+    local all_metrics=""
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local mport=$(get_snowflake_metrics_port $i)
+        local metrics=""
+        metrics=$(curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null) || continue
+        all_metrics+="$metrics"$'\n'
+    done
 
-    # Parse tor_snowflake_proxy_connections_total{type="...",country="xx"} value
-    # Portable awk — no gawk match() needed
-    echo "$metrics" | awk '
+    [ -z "$all_metrics" ] && return 1
+
+    echo "$all_metrics" | awk '
         /^tor_snowflake_proxy_connections_total\{/ {
             val = $NF + 0
             country = ""
@@ -2757,23 +3023,27 @@ health_check() {
 
     # Snowflake proxy health
     if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
-        echo ""
-        echo -e "  ${BOLD}--- Snowflake Proxy ---${NC}"
+        for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            local _sfn=$(get_snowflake_name $_sfi)
+            local _sfm=$(get_snowflake_metrics_port $_sfi)
+            echo ""
+            echo -e "  ${BOLD}--- ${_sfn} ---${NC}"
 
-        echo -n "  Container running:    "
-        if is_snowflake_running; then
-            echo -e "${GREEN}OK${NC}"
-        else
-            echo -e "${RED}STOPPED${NC}"
-            all_ok=false
-        fi
+            echo -n "  Container running:    "
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sfn}$"; then
+                echo -e "${GREEN}OK${NC}"
+            else
+                echo -e "${RED}STOPPED${NC}"
+                all_ok=false
+            fi
 
-        echo -n "  Metrics endpoint:     "
-        if curl -s --max-time 3 "http://127.0.0.1:${SNOWFLAKE_METRICS_PORT}/internal/metrics" &>/dev/null; then
-            echo -e "${GREEN}OK (port $SNOWFLAKE_METRICS_PORT)${NC}"
-        else
-            echo -e "${YELLOW}NOT ACCESSIBLE${NC}"
-        fi
+            echo -n "  Metrics endpoint:     "
+            if curl -s --max-time 3 "http://127.0.0.1:${_sfm}/internal/metrics" &>/dev/null; then
+                echo -e "${GREEN}OK (port $_sfm)${NC}"
+            else
+                echo -e "${YELLOW}NOT ACCESSIBLE${NC}"
+            fi
+        done
     fi
 
     echo ""
@@ -2796,7 +3066,10 @@ get_container_stats() {
         names+=" $(get_container_name $i)"
     done
     if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
-        names+=" $SNOWFLAKE_CONTAINER"
+        for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            local _sfn=$(get_snowflake_name $_sfi)
+            docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sfn}$" && names+=" $_sfn"
+        done
     fi
     local all_stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $names 2>/dev/null)
     local _nlines=$(echo "$all_stats" | wc -l)
@@ -3024,6 +3297,15 @@ show_dashboard() {
             echo -e "${BOLD}Status:${NC} ${GREEN}Running${NC} (${uptime_str})${EL}"
             echo -e "  Containers: ${GREEN}${running}${NC}/${count}    Circuits: ${GREEN}${total_circuits}${NC}    Connections: ${GREEN}${total_conns}${NC}${EL}"
 
+            # Add snowflake traffic to totals
+            if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+                local _sf_t=$(get_snowflake_stats 2>/dev/null)
+                local _sf_tin=$(echo "$_sf_t" | awk '{print $2}')
+                local _sf_tout=$(echo "$_sf_t" | awk '{print $3}')
+                total_read=$((total_read + ${_sf_tin:-0}))
+                total_written=$((total_written + ${_sf_tout:-0}))
+            fi
+
             echo -e "${EL}"
             echo -e "${CYAN}═══ Traffic (total) ═══${NC}${EL}"
             echo -e "  Downloaded:   ${CYAN}$(format_bytes $total_read)${NC}${EL}"
@@ -3175,15 +3457,28 @@ show_dashboard() {
             fi
 
             echo -e "${EL}"
+        elif [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+            # Snowflake-only mode (no relay containers)
+            local _sf_only_t=$(get_snowflake_stats 2>/dev/null)
+            local _sf_only_in=$(echo "$_sf_only_t" | awk '{print $2}')
+            local _sf_only_out=$(echo "$_sf_only_t" | awk '{print $3}')
+            echo -e "${BOLD}Status:${NC} ${GREEN}Running (Snowflake only)${NC}${EL}"
+            echo -e "${EL}"
+            echo -e "${CYAN}═══ Traffic (total) ═══${NC}${EL}"
+            echo -e "  Downloaded:   ${CYAN}$(format_bytes ${_sf_only_in:-0})${NC}${EL}"
+            echo -e "  Uploaded:     ${CYAN}$(format_bytes ${_sf_only_out:-0})${NC}${EL}"
+            echo -e "${EL}"
         else
             echo -e "${BOLD}Status:${NC} ${RED}Stopped${NC}${EL}"
-            echo -e "  All $count container(s) are stopped.${EL}"
+            echo -e "  All container(s) are stopped.${EL}"
             echo -e "${EL}"
         fi
 
         # Snowflake stats
         if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
-            echo -e "${CYAN}═══ Snowflake Proxy (WebRTC) ═══${NC}${EL}"
+            local _sf_label="Snowflake Proxy (WebRTC)"
+            [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_label="Snowflake Proxy (WebRTC) x${SNOWFLAKE_COUNT}"
+            echo -e "${CYAN}═══ ${_sf_label} ═══${NC}${EL}"
             if is_snowflake_running; then
                 local sf_stats=$(get_snowflake_stats 2>/dev/null)
                 local sf_conns=$(echo "$sf_stats" | awk '{print $1}')
@@ -3305,20 +3600,23 @@ show_advanced_stats() {
                 "$cname" "$status" "${dl:-–}" "${ul:-–}" "${circ:-–}" "${conn:-–}" "${cpu:-–}"
         done
 
-        # Snowflake row in advanced stats
+        # Snowflake rows in advanced stats (one per instance)
         if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
-            local sf_status="${RED}STOPPED${NC}"
-            local sf_dl="" sf_ul="" sf_conns_adv="" sf_cpu=""
-            if is_snowflake_running; then
-                sf_status="${GREEN}RUNNING${NC}"
-                local sf_s=$(get_snowflake_stats 2>/dev/null)
-                sf_conns_adv=$(echo "$sf_s" | awk '{print $1}')
-                sf_dl=$(format_bytes $(echo "$sf_s" | awk '{print $2}'))
-                sf_ul=$(format_bytes $(echo "$sf_s" | awk '{print $3}'))
-                sf_cpu=$(echo "$docker_stats_out" | grep "^${SNOWFLAKE_CONTAINER} " | awk '{print $2}')
-            fi
-            printf "  %-14s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
-                "snowflake" "$sf_status" "${sf_dl:-–}" "${sf_ul:-–}" "${sf_conns_adv:-–}" "–" "${sf_cpu:-–}"
+            for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                local _sf_cname=$(get_snowflake_name $_sfi)
+                local sf_status="${RED}STOPPED${NC}"
+                local sf_dl="" sf_ul="" sf_conns_adv="" sf_cpu=""
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sf_cname}$"; then
+                    sf_status="${GREEN}RUNNING${NC}"
+                    local sf_s=$(get_snowflake_instance_stats $_sfi 2>/dev/null)
+                    sf_conns_adv=$(echo "$sf_s" | awk '{print $1}')
+                    sf_dl=$(format_bytes $(echo "$sf_s" | awk '{print $2}'))
+                    sf_ul=$(format_bytes $(echo "$sf_s" | awk '{print $3}'))
+                    sf_cpu=$(echo "$docker_stats_out" | grep "^${_sf_cname} " | awk '{print $2}')
+                fi
+                printf "  %-14s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
+                    "$_sf_cname" "$sf_status" "${sf_dl:-–}" "${sf_ul:-–}" "${sf_conns_adv:-–}" "–" "${sf_cpu:-–}"
+            done
         fi
 
         echo -e "${EL}"
@@ -3541,7 +3839,9 @@ show_peers() {
         # Snowflake section
         if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
             echo -e "${EL}"
-            echo -e "${CYAN}═══ Snowflake Proxy (WebRTC) ═══${NC}${EL}"
+            local _sf_label2="Snowflake Proxy (WebRTC)"
+            [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_label2="Snowflake Proxy (WebRTC) x${SNOWFLAKE_COUNT}"
+            echo -e "${CYAN}═══ ${_sf_label2} ═══${NC}${EL}"
             local _sf_country
             _sf_country=$(get_snowflake_country_stats 2>/dev/null)
             local _sf_stats
@@ -4798,21 +5098,23 @@ build_report() {
     local total_running=$running
     local sf_conns=0 sf_in=0 sf_out=0
     if [ "${SNOWFLAKE_ENABLED:-false}" = "true" ]; then
-        total_containers=$((total_containers + 1))
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^snowflake-proxy$"; then
-            total_running=$((total_running + 1))
-            local sf_metrics=$(curl -s --max-time 3 "http://127.0.0.1:${SNOWFLAKE_METRICS_PORT:-9999}/internal/metrics" 2>/dev/null)
-            [ -n "$sf_metrics" ] && sf_conns=$(echo "$sf_metrics" | awk '/^tor_snowflake_proxy_connections_total[{ ]/ { sum += $NF } END { printf "%.0f", sum }' 2>/dev/null)
-            sf_conns=${sf_conns:-0}
-            local sf_log=$(docker logs snowflake-proxy 2>&1 | grep "Traffic Relayed" 2>/dev/null)
-            if [ -n "$sf_log" ]; then
-                sf_in=$(echo "$sf_log" | awk -F'[↓↑]' '{ split($2, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1] } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
-                sf_out=$(echo "$sf_log" | awk -F'[↓↑]' '{ split($3, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1] } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
+        total_containers=$((total_containers + ${SNOWFLAKE_COUNT:-1}))
+        for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            local _sfn=$(get_snowflake_name $_sfi)
+            local _sfm=$(get_snowflake_metrics_port $_sfi)
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sfn}$"; then
+                total_running=$((total_running + 1))
+                local sf_metrics=$(curl -s --max-time 3 "http://127.0.0.1:${_sfm}/internal/metrics" 2>/dev/null)
+                [ -n "$sf_metrics" ] && sf_conns=$((sf_conns + $(echo "$sf_metrics" | awk '/^tor_snowflake_proxy_connections_total[{ ]/ { sum += $NF } END { printf "%.0f", sum }' 2>/dev/null || echo 0)))
+                local sf_log=$(docker logs "$_sfn" 2>&1 | grep "Traffic Relayed" 2>/dev/null)
+                if [ -n "$sf_log" ]; then
+                    sf_in=$((sf_in + $(echo "$sf_log" | awk -F'[↓↑]' '{ split($2, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1] } END { printf "%.0f", sum * 1024 }' 2>/dev/null || echo 0)))
+                    sf_out=$((sf_out + $(echo "$sf_log" | awk -F'[↓↑]' '{ split($3, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1] } END { printf "%.0f", sum * 1024 }' 2>/dev/null || echo 0)))
+                fi
             fi
-            sf_in=${sf_in:-0}; sf_out=${sf_out:-0}
-            total_read=$((total_read + sf_in))
-            total_written=$((total_written + sf_out))
-        fi
+        done
+        total_read=$((total_read + sf_in))
+        total_written=$((total_written + sf_out))
     fi
 
     if [ -n "$earliest_start" ] && [ "$earliest_start" -gt 0 ] 2>/dev/null; then
@@ -4849,7 +5151,12 @@ build_report() {
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
         names+=" $(get_container_name $i)"
     done
-    [ "${SNOWFLAKE_ENABLED:-false}" = "true" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^snowflake-proxy$" && names+=" snowflake-proxy"
+    if [ "${SNOWFLAKE_ENABLED:-false}" = "true" ]; then
+        for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            local _sfn=$(get_snowflake_name $_sfi)
+            docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sfn}$" && names+=" $_sfn"
+        done
+    fi
     local stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $names 2>/dev/null | head -1)
     if [ -n "$stats" ]; then
         local raw_cpu=$(echo "$stats" | awk '{print $1}')
@@ -5013,23 +5320,17 @@ except Exception:
             /tor_snowflake|/tor_snowflake@*)
                 if [ "${SNOWFLAKE_ENABLED:-false}" != "true" ]; then
                     telegram_send "❄ Snowflake proxy is not enabled."
-                elif ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^snowflake-proxy$"; then
+                elif ! is_snowflake_running; then
                     telegram_send "❄ *Snowflake Proxy*
 🔴 Status: Stopped"
                 else
-                    local sf_metrics=$(curl -s --max-time 3 "http://127.0.0.1:${SNOWFLAKE_METRICS_PORT:-9999}/internal/metrics" 2>/dev/null)
-                    local sf_total_conns=0
-                    [ -n "$sf_metrics" ] && sf_total_conns=$(echo "$sf_metrics" | awk '/^tor_snowflake_proxy_connections_total[{ ]/ { sum += $NF } END { printf "%.0f", sum }' 2>/dev/null)
-                    sf_total_conns=${sf_total_conns:-0}
-                    local sf_log=$(docker logs snowflake-proxy 2>&1 | grep "Traffic Relayed" 2>/dev/null)
-                    local sf_in=0 sf_out=0
-                    if [ -n "$sf_log" ]; then
-                        sf_in=$(echo "$sf_log" | awk -F'[↓↑]' '{ split($2, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1] } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
-                        sf_out=$(echo "$sf_log" | awk -F'[↓↑]' '{ split($3, a, " "); gsub(/[^0-9.]/, "", a[1]); sum += a[1] } END { printf "%.0f", sum * 1024 }' 2>/dev/null)
-                    fi
-                    sf_in=${sf_in:-0}; sf_out=${sf_out:-0}
+                    local _sf_agg=$(get_snowflake_stats 2>/dev/null)
+                    local sf_total_conns=$(echo "$_sf_agg" | awk '{print $1}')
+                    local sf_in=$(echo "$_sf_agg" | awk '{print $2}')
+                    local sf_out=$(echo "$_sf_agg" | awk '{print $3}')
+                    sf_total_conns=${sf_total_conns:-0}; sf_in=${sf_in:-0}; sf_out=${sf_out:-0}
                     local sf_total=$((sf_in + sf_out))
-                    local sf_started=$(docker inspect --format='{{.State.StartedAt}}' snowflake-proxy 2>/dev/null | cut -d'.' -f1)
+                    local sf_started=$(docker inspect --format='{{.State.StartedAt}}' "$(get_snowflake_name 1)" 2>/dev/null | cut -d'.' -f1)
                     local sf_uptime="unknown"
                     if [ -n "$sf_started" ]; then
                         local sf_se=$(date -d "$sf_started" +%s 2>/dev/null || echo 0)
@@ -5041,18 +5342,8 @@ except Exception:
                     fi
                     # Top countries
                     local sf_countries=""
-                    if [ -n "$sf_metrics" ]; then
-                        sf_countries=$(echo "$sf_metrics" | awk '
-                            /^tor_snowflake_proxy_connections_total\{/ {
-                                val = $NF + 0; country = ""
-                                s = $0; idx = index(s, "country=\"")
-                                if (idx > 0) { s = substr(s, idx + 9); end = index(s, "\""); if (end > 0) country = substr(s, 1, end - 1) }
-                                if (country != "" && val > 0) counts[country] += val
-                            }
-                            END { for (c in counts) print counts[c] "|" c }
-                        ' 2>/dev/null | sort -t'|' -k1 -nr | head -5)
-                    fi
-                    local sf_msg="❄ *Snowflake Proxy*
+                    sf_countries=$(get_snowflake_country_stats 2>/dev/null | head -5)
+                    local sf_msg="❄ *Snowflake Proxy* (${SNOWFLAKE_COUNT:-1} instance(s))
 🟢 Status: Running
 ⏱ Uptime: ${sf_uptime}
 👥 Total connections: ${sf_total_conns}
@@ -5534,10 +5825,14 @@ uninstall() {
         docker volume rm "$vname" 2>/dev/null || true
     done
 
-    # Stop and remove Snowflake
-    docker stop --timeout 10 "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
-    docker rm -f "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
-    docker volume rm "$SNOWFLAKE_VOLUME" 2>/dev/null || true
+    # Stop and remove Snowflake (check up to 2 for orphaned instances)
+    for _sfi in 1 2; do
+        local _sfn=$(get_snowflake_name $_sfi)
+        local _sfv=$(get_snowflake_volume $_sfi)
+        docker stop --timeout 10 "$_sfn" 2>/dev/null || true
+        docker rm -f "$_sfn" 2>/dev/null || true
+        docker volume rm "$_sfv" 2>/dev/null || true
+    done
 
     # Remove images
     docker rmi "$BRIDGE_IMAGE" 2>/dev/null || true
@@ -5583,7 +5878,10 @@ show_logs() {
         _opt=$((_opt + 1))
     done
     if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
-        echo -e "    ${GREEN}${_opt}.${NC} snowflake (WebRTC proxy)"
+        for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            echo -e "    ${GREEN}${_opt}.${NC} $(get_snowflake_name $_sfi) (WebRTC proxy)"
+            _opt=$((_opt + 1))
+        done
     fi
     echo -e "    ${GREEN}0.${NC} ← Back"
     echo ""
@@ -5592,8 +5890,11 @@ show_logs() {
     [ "$choice" = "0" ] && return
 
     local cname=""
-    if [ "$SNOWFLAKE_ENABLED" = "true" ] && [ "$choice" = "$_opt" ]; then
-        cname="$SNOWFLAKE_CONTAINER"
+    local _sf_start=$((count + 1))
+    local _sf_end=$((count + ${SNOWFLAKE_COUNT:-1}))
+    if [ "$SNOWFLAKE_ENABLED" = "true" ] && [ "$choice" -ge "$_sf_start" ] 2>/dev/null && [ "$choice" -le "$_sf_end" ] 2>/dev/null; then
+        local _sf_idx=$((choice - count))
+        cname=$(get_snowflake_name $_sf_idx)
     elif [[ "$choice" =~ ^[1-9]$ ]] && [ "$choice" -le "$count" ]; then
         cname=$(get_container_name $choice)
     else
@@ -5808,7 +6109,9 @@ show_about() {
                 echo -e "  ${BOLD}and your hosting provider explicitly permits it.${NC}"
                 ;;
             5)
-                echo -e "${CYAN}═══ Snowflake Proxy (WebRTC) ═══${NC}"
+                local _sf_menu_label="Snowflake Proxy (WebRTC)"
+                [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_menu_label="Snowflake Proxy (WebRTC) x${SNOWFLAKE_COUNT}"
+                echo -e "${CYAN}═══ ${_sf_menu_label} ═══${NC}"
                 echo ""
                 echo -e "  Snowflake is a pluggable transport that uses ${BOLD}WebRTC${NC} to help"
                 echo -e "  censored users connect to the Tor network. It's different from"
@@ -6023,7 +6326,9 @@ show_menu() {
         if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
             local _sf_label="${GREEN}Running${NC}"
             is_snowflake_running || _sf_label="${RED}Stopped${NC}"
-            echo -e "    ${GREEN}s.${NC} ❄  Snowflake Proxy [${_sf_label}]"
+            local _sf_cnt_label=""
+            [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_cnt_label=" (${SNOWFLAKE_COUNT} instances)"
+            echo -e "    ${GREEN}s.${NC} ❄  Snowflake Proxy [${_sf_label}]${_sf_cnt_label}"
         else
             echo -e "    ${GREEN}s.${NC} ❄  Enable Snowflake Proxy"
         fi
@@ -6050,14 +6355,23 @@ show_menu() {
                 ;;
             5)
                 start_relay
+                if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                    start_snowflake_container
+                fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
             6)
                 stop_relay
+                if [ "$RELAY_TYPE" = "none" ]; then
+                    stop_snowflake_container
+                fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
             7)
                 restart_relay
+                if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                    restart_snowflake_container
+                fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
             8)
@@ -6083,13 +6397,26 @@ show_menu() {
             s|S)
                 if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
                     echo ""
-                    echo -e "  Snowflake is currently ${GREEN}enabled${NC}."
-                    echo -e "  Resources: CPU: ${CYAN}${SNOWFLAKE_CPUS:-1.0}${NC}  RAM: ${CYAN}${SNOWFLAKE_MEMORY:-256m}${NC}"
+                    echo -e "  Snowflake is currently ${GREEN}enabled${NC} (${SNOWFLAKE_COUNT:-1} instance(s))."
+                    for _si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                        local _sn=$(get_snowflake_name $_si)
+                        local _sc=$(get_snowflake_cpus $_si)
+                        local _sm=$(get_snowflake_memory $_si)
+                        local _ss="${RED}Stopped${NC}"
+                        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sn}$" && _ss="${GREEN}Running${NC}"
+                        echo -e "    ${_sn}: [${_ss}]  CPU: ${CYAN}${_sc}${NC}  RAM: ${CYAN}${_sm}${NC}"
+                    done
                     echo ""
-                    echo -e "    1. Restart Snowflake proxy"
-                    echo -e "    2. Stop Snowflake proxy"
+                    echo -e "    1. Restart all Snowflake proxies"
+                    echo -e "    2. Stop all Snowflake proxies"
                     echo -e "    3. Disable Snowflake"
                     echo -e "    4. Change resource limits"
+                    if [ "${SNOWFLAKE_COUNT:-1}" -lt 2 ]; then
+                        echo -e "    5. Add another Snowflake instance"
+                    fi
+                    if [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ]; then
+                        echo -e "    6. Remove Snowflake instance #${SNOWFLAKE_COUNT} (keep #1 running)"
+                    fi
                     echo -e "    0. Back"
                     read -p "  choice: " sf_choice < /dev/tty || true
                     case "${sf_choice:-0}" in
@@ -6097,6 +6424,8 @@ show_menu() {
                         2)
                             stop_snowflake_container
                             log_warn "Snowflake stopped but still enabled. It will restart on next 'torware start'. Use option 3 to disable permanently."
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            echo ""
                             ;;
                         3)
                             SNOWFLAKE_ENABLED="false"
@@ -6106,35 +6435,88 @@ show_menu() {
                             ;;
                         4)
                             echo ""
-                            echo -e "  ${BOLD}Current limits:${NC} CPU: ${SNOWFLAKE_CPUS:-1.0}, RAM: ${SNOWFLAKE_MEMORY:-256m}"
-                            echo ""
                             echo -e "  ${DIM}CPU: number of cores (e.g. 0.5, 1.0, 2.0)${NC}"
                             echo -e "  ${DIM}RAM: amount with unit (e.g. 128m, 256m, 512m, 1g)${NC}"
                             echo ""
-                            read -p "  CPU cores [${SNOWFLAKE_CPUS:-1.0}]: " _sf_cpu < /dev/tty || true
-                            read -p "  RAM limit [${SNOWFLAKE_MEMORY:-256m}]: " _sf_mem < /dev/tty || true
-                            # Validate CPU (must be a number)
-                            if [ -n "$_sf_cpu" ]; then
-                                if [[ "$_sf_cpu" =~ ^[0-9]+\.?[0-9]*$ ]]; then
-                                    SNOWFLAKE_CPUS="$_sf_cpu"
-                                else
-                                    log_warn "Invalid CPU value, keeping ${SNOWFLAKE_CPUS:-1.0}"
+                            for _si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                                local _sn=$(get_snowflake_name $_si)
+                                local _cur_cpu=$(get_snowflake_cpus $_si)
+                                local _cur_mem=$(get_snowflake_memory $_si)
+                                echo -e "  ${BOLD}${_sn}:${NC}"
+                                read -p "    CPU cores [${_cur_cpu}]: " _sf_cpu < /dev/tty || true
+                                read -p "    RAM limit [${_cur_mem}]: " _sf_mem < /dev/tty || true
+                                if [ -n "$_sf_cpu" ]; then
+                                    if [[ "$_sf_cpu" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                                        eval "SNOWFLAKE_CPUS_${_si}=\"$_sf_cpu\""
+                                    else
+                                        log_warn "Invalid CPU value, keeping ${_cur_cpu}"
+                                    fi
                                 fi
-                            fi
-                            # Validate RAM (must be number + m or g)
-                            if [ -n "$_sf_mem" ]; then
-                                if [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]]; then
-                                    SNOWFLAKE_MEMORY=$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')
-                                else
-                                    log_warn "Invalid RAM value, keeping ${SNOWFLAKE_MEMORY:-256m}"
+                                if [ -n "$_sf_mem" ]; then
+                                    if [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]]; then
+                                        eval "SNOWFLAKE_MEMORY_${_si}=\"$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')\""
+                                    else
+                                        log_warn "Invalid RAM value, keeping ${_cur_mem}"
+                                    fi
                                 fi
-                            fi
+                            done
                             save_settings
-                            log_success "Snowflake limits updated: CPU=${SNOWFLAKE_CPUS}, RAM=${SNOWFLAKE_MEMORY}"
+                            log_success "Snowflake limits updated"
                             echo ""
                             read -p "  Restart Snowflake to apply? [Y/n] " _sf_rs < /dev/tty || true
                             if [[ ! "$_sf_rs" =~ ^[Nn]$ ]]; then
                                 restart_snowflake_container
+                            fi
+                            ;;
+                        5)
+                            if [ "${SNOWFLAKE_COUNT:-1}" -ge 2 ]; then
+                                log_warn "Maximum of 2 Snowflake instances supported."
+                            else
+                                local _new_idx=2
+                                local _def_cpu=$(get_snowflake_default_cpus)
+                                local _def_mem=$(get_snowflake_default_memory)
+                                echo ""
+                                echo -e "  ${BOLD}Adding Snowflake instance #${_new_idx}${NC}"
+                                echo -e "  ${DIM}Each instance registers independently with the broker${NC}"
+                                echo -e "  ${DIM}and receives its own client assignments.${NC}"
+                                echo ""
+                                read -p "  CPU cores [${_def_cpu}]: " _sf_cpu < /dev/tty || true
+                                read -p "  RAM limit [${_def_mem}]: " _sf_mem < /dev/tty || true
+                                [ -z "$_sf_cpu" ] && _sf_cpu="$_def_cpu"
+                                [ -z "$_sf_mem" ] && _sf_mem="$_def_mem"
+                                if [[ "$_sf_cpu" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                                    eval "SNOWFLAKE_CPUS_${_new_idx}=\"$_sf_cpu\""
+                                else
+                                    log_warn "Invalid CPU, using default ${_def_cpu}"
+                                    eval "SNOWFLAKE_CPUS_${_new_idx}=\"$_def_cpu\""
+                                fi
+                                if [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]]; then
+                                    eval "SNOWFLAKE_MEMORY_${_new_idx}=\"$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')\""
+                                else
+                                    log_warn "Invalid RAM, using default ${_def_mem}"
+                                    eval "SNOWFLAKE_MEMORY_${_new_idx}=\"$_def_mem\""
+                                fi
+                                SNOWFLAKE_COUNT=$_new_idx
+                                save_settings
+                                run_snowflake_container $_new_idx
+                            fi
+                            ;;
+                        6)
+                            if [ "${SNOWFLAKE_COUNT:-1}" -le 1 ]; then
+                                log_warn "Cannot remove the last instance. Use option 3 to disable Snowflake."
+                            else
+                                local _rm_idx=${SNOWFLAKE_COUNT}
+                                local _rm_name=$(get_snowflake_name $_rm_idx)
+                                docker stop --timeout 10 "$_rm_name" 2>/dev/null || true
+                                docker rm -f "$_rm_name" 2>/dev/null || true
+                                docker volume rm "$(get_snowflake_volume $_rm_idx)" 2>/dev/null || true
+                                eval "SNOWFLAKE_CPUS_${_rm_idx}=''"
+                                eval "SNOWFLAKE_MEMORY_${_rm_idx}=''"
+                                SNOWFLAKE_COUNT=$((_rm_idx - 1))
+                                save_settings
+                                log_success "Removed $_rm_name (now running $SNOWFLAKE_COUNT instance(s))"
+                                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                                echo ""
                             fi
                             ;;
                     esac
@@ -6145,8 +6527,18 @@ show_menu() {
                     read -p "  Enable Snowflake proxy? [y/N] " sf_en < /dev/tty || true
                     if [[ "$sf_en" =~ ^[Yy]$ ]]; then
                         SNOWFLAKE_ENABLED="true"
+                        SNOWFLAKE_COUNT=1
+                        local _def_cpu=$(get_snowflake_default_cpus)
+                        local _def_mem=$(get_snowflake_default_memory)
+                        echo ""
+                        read -p "  CPU cores [${_def_cpu}]: " _sf_cpu < /dev/tty || true
+                        read -p "  RAM limit [${_def_mem}]: " _sf_mem < /dev/tty || true
+                        [ -z "$_sf_cpu" ] && _sf_cpu="$_def_cpu"
+                        [ -z "$_sf_mem" ] && _sf_mem="$_def_mem"
+                        [[ "$_sf_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] && SNOWFLAKE_CPUS_1="$_sf_cpu" || SNOWFLAKE_CPUS_1="$_def_cpu"
+                        [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]] && SNOWFLAKE_MEMORY_1="$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')" || SNOWFLAKE_MEMORY_1="$_def_mem"
                         save_settings
-                        run_snowflake_container
+                        run_snowflake_container 1
                     fi
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
@@ -6646,12 +7038,15 @@ cli_main() {
     case "${1:-}" in
         start)
             start_relay
+            [ "$SNOWFLAKE_ENABLED" = "true" ] && start_snowflake_container
             ;;
         stop)
             stop_relay
+            [ "$RELAY_TYPE" = "none" ] && stop_snowflake_container
             ;;
         restart)
             restart_relay
+            [ "$SNOWFLAKE_ENABLED" = "true" ] && restart_snowflake_container
             ;;
         status)
             show_status
@@ -6765,8 +7160,9 @@ main() {
         echo "  What would you like to do?"
         echo ""
         echo "  1. 📊 Open management menu"
-        echo "  2. 🔄 Reinstall (fresh install)"
-        echo "  3. 🗑  Uninstall"
+        echo "  2. ⬆  Update Torware (keeps containers & settings)"
+        echo "  3. 🔄 Reinstall (fresh install)"
+        echo "  4. 🗑  Uninstall"
         echo "  0. 🚪 Exit"
         echo ""
         read -p "  Enter choice: " choice < /dev/tty || { echo -e "\n  ${RED}Input error.${NC}"; exit 1; }
@@ -6779,9 +7175,20 @@ main() {
                 ;;
             2)
                 echo ""
-                log_info "Starting fresh reinstall..."
+                log_info "Updating Torware script..."
+                create_management_script
+                log_success "Torware updated. Your containers and settings are unchanged."
+                echo ""
+                echo -e "  ${DIM}New features available in the management menu.${NC}"
+                echo ""
+                read -n 1 -s -r -p "  Press any key to open the menu..." < /dev/tty
+                exec "$INSTALL_DIR/torware" menu
                 ;;
             3)
+                echo ""
+                log_info "Starting fresh reinstall..."
+                ;;
+            4)
                 uninstall
                 exit 0
                 ;;
@@ -6836,8 +7243,11 @@ main() {
         docker stop --timeout 30 "$cname" 2>/dev/null || true
         docker rm -f "$cname" 2>/dev/null || true
     done
-    docker stop --timeout 10 "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
-    docker rm -f "$SNOWFLAKE_CONTAINER" 2>/dev/null || true
+    for _sfi in 1 2; do
+        local _sfn=$(get_snowflake_name $_sfi)
+        docker stop --timeout 10 "$_sfn" 2>/dev/null || true
+        docker rm -f "$_sfn" 2>/dev/null || true
+    done
     run_all_containers
 
     echo ""
