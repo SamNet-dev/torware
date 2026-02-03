@@ -61,10 +61,20 @@ Run up to 5 Tor containers simultaneously:
 - Mixed relay types (e.g., container 1 = bridge, container 2 = middle)
 - Add/remove containers from the management menu
 
+### MTProxy (Telegram Proxy)
+Run an official Telegram proxy to help censored users access Telegram:
+- FakeTLS obfuscation (traffic disguised as HTTPS)
+- QR code and link generation for easy sharing
+- Send proxy link directly via Telegram bot
+- Configurable port, domain, CPU/memory limits
+- Connection limits and geo-blocking options
+- Host networking for reliable performance
+
 ### Telegram Notifications
 - Setup wizard with guided BotFather integration
 - Periodic status reports (configurable interval + start hour)
-- Bot commands: `/tor_status`, `/tor_peers`, `/tor_uptime`, `/tor_containers`, `/tor_snowflake`, `/tor_unbounded`, `/tor_start_N`, `/tor_stop_N`, `/tor_restart_N`, `/tor_help`
+- Bot commands: `/tor_status`, `/tor_peers`, `/tor_uptime`, `/tor_containers`, `/tor_snowflake`, `/tor_unbounded`, `/tor_mtproxy`, `/tor_start_N`, `/tor_stop_N`, `/tor_restart_N`, `/tor_help`
+- Send MTProxy link & QR code via bot
 - Alerts for high CPU, high RAM, all containers down, or zero connections
 - Daily and weekly summary reports
 - Uses `/tor_` prefix so the bot can be shared with other services
@@ -112,6 +122,7 @@ torware fingerprint     Show relay fingerprint(s)
 torware bridge-line     Show bridge line(s) for sharing
 torware snowflake       Snowflake proxy management
 torware unbounded       Unbounded proxy status
+torware mtproxy         MTProxy (Telegram) status and link
 torware backup          Backup Tor identity keys
 torware restore         Restore from backup
 torware uninstall       Remove Torware and containers
@@ -147,10 +158,11 @@ Snowflake does **not** need port forwarding — WebRTC handles NAT traversal aut
 
 | Relay Type | Image |
 |------------|-------|
-| Bridge (obfs4) | `thetorproject/obfs4-bridge:latest` |
-| Middle/Exit Relay | `osminogin/tor-simple:latest` |
-| Snowflake Proxy | `thetorproject/snowflake-proxy:latest` |
+| Bridge (obfs4) | `thetorproject/obfs4-bridge:0.24` |
+| Middle/Exit Relay | `osminogin/tor-simple:0.4.8.10` |
+| Snowflake Proxy | `thetorproject/snowflake-proxy:0.20` |
 | Unbounded Proxy | `torware/unbounded-widget:latest` (built from source) |
+| MTProxy (Telegram) | `nineseconds/mtg:2.1.7` |
 
 ## File Structure
 
@@ -186,6 +198,10 @@ Key settings:
 - `SNOWFLAKE_CPUS` / `SNOWFLAKE_MEMORY` — Snowflake resource limits
 - `UNBOUNDED_ENABLED` — true/false
 - `UNBOUNDED_CPUS` / `UNBOUNDED_MEMORY` — Unbounded resource limits
+- `MTPROXY_ENABLED` — true/false
+- `MTPROXY_PORT` — Telegram proxy port (default: 8443)
+- `MTPROXY_DOMAIN` — FakeTLS domain (default: cloudflare.com)
+- `MTPROXY_CPUS` / `MTPROXY_MEMORY` — MTProxy resource limits
 
 Per-container overrides: `RELAY_TYPE_N`, `BANDWIDTH_N`, `ORPORT_N` (where N is the container index).
 
@@ -207,7 +223,18 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ## Changelog
 
-### v1.1
+### v1.1 — Feature Patch
+- **MTProxy (Telegram Proxy)** — Run an official Telegram proxy to help censored users access Telegram
+  - FakeTLS obfuscation (traffic looks like HTTPS to cloudflare.com, google.com, etc.)
+  - Host networking mode for reliable DNS resolution
+  - Prometheus metrics for accurate traffic monitoring
+  - QR code generation for easy sharing
+  - Telegram bot integration: send proxy link & QR via `/tor_mtproxy` command
+  - Menu option to send link via Telegram after setup or changes
+  - Port change warnings (alerts when proxy URL changes)
+  - Security settings: connection limits, geo-blocking by country
+  - CLI command: `torware mtproxy`
+  - Setup wizard integration (standalone or as add-on)
 - **Lantern Unbounded Proxy** — Run Lantern's Unbounded volunteer WebRTC proxy alongside your relay to help censored users access the internet through a second censorship-circumvention network
   - Built from source during Docker image creation (pinned to production-compatible commit)
   - Live and all-time connection tracking on the dashboard
@@ -217,9 +244,20 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
   - Health check integration
   - Setup wizard integration (standalone or as add-on to any relay type)
   - About & Learn section explaining Unbounded/Lantern
-- **Compact advanced stats** — Merged upload/download country tables into a single combined traffic table, reduced from top 10/7 to top 5 to fit on one screen
-- **Container details alignment** — Fixed table alignment when container names are long (e.g. `snowflake-proxy-2`)
-- **View Logs** menu now includes Unbounded container
+- **Docker images pinned** — All images now use specific version tags for reproducibility (no more `:latest`)
+- **Security improvements**
+  - Sanitized settings file loading (explicit parsing instead of bash source)
+  - Bash 4.2+ requirement for safer variable handling
+  - Health checks for all containers (Tor relays, Snowflake, Unbounded, MTProxy)
+- **Structured JSON logging** — Optional JSON log format for integration with log aggregators (`LOG_FORMAT=json`)
+- **Centralized configuration** — New CONFIG array for cleaner state management
+- **Dashboard optimizations**
+  - Parallel data fetching for faster refresh
+  - All graphs limited to top 5 for better screen fit
+  - MTProxy stats integrated into all dashboard views
+- **Compact advanced stats** — Merged upload/download country tables into a single combined traffic table
+- **Container details alignment** — Fixed table alignment when container names are long
+- **View Logs** menu now includes Unbounded and MTProxy containers
 
 ### v1.0.1 — Feature Patch
 - Fixed dashboard uptime showing N/A
@@ -281,6 +319,10 @@ curl -sL https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh | 
 - **داشبورد زنده** — نمایش لحظه‌ای مدارها، پهنای باند، مصرف CPU/RAM و کشور کاربران
 - **پروکسی اسنوفلیک (Snowflake)** — کمک به کاربران سانسورشده از طریق WebRTC بدون نیاز به Port Forwarding
 - **پروکسی آنباندد (Unbounded/Lantern)** — اجرای پروکسی داوطلبانه لنترن برای کمک به کاربران سانسورشده از طریق شبکه دوم ضد سانسور
+- **پروکسی MTProxy (تلگرام)** — اجرای پروکسی رسمی تلگرام برای کمک به کاربران سانسورشده برای دسترسی به تلگرام
+  - پنهان‌سازی FakeTLS (ترافیک شبیه HTTPS به نظر می‌رسد)
+  - تولید QR کد و لینک برای اشتراک‌گذاری آسان
+  - ارسال لینک مستقیم از طریق ربات تلگرام
 - **چند کانتینر** — تا ۵ کانتینر تور همزمان با انواع مختلف رله
 - **اعلان‌های تلگرام** — گزارش وضعیت خودکار و دستورات ربات
 - **بررسی سلامت** — ۱۵ نقطه تشخیصی برای اطمینان از عملکرد صحیح
@@ -328,19 +370,34 @@ curl -sL https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh | 
 
 ### تاریخچه تغییرات
 
-#### نسخه ۱.۱
+#### نسخه ۱.۱ — وصله ویژگی
+- **پروکسی MTProxy (تلگرام)** — اجرای پروکسی رسمی تلگرام برای کمک به کاربران سانسورشده
+  - پنهان‌سازی FakeTLS (ترافیک شبیه HTTPS به cloudflare.com یا google.com به نظر می‌رسد)
+  - حالت شبکه host برای رفع مشکلات DNS
+  - متریک‌های Prometheus برای نظارت دقیق ترافیک
+  - تولید QR کد برای اشتراک‌گذاری آسان
+  - ارسال لینک و QR کد از طریق ربات تلگرام با دستور `/tor_mtproxy`
+  - هشدار هنگام تغییر پورت (اطلاع‌رسانی تغییر URL پروکسی)
+  - تنظیمات امنیتی: محدودیت اتصال، مسدودسازی جغرافیایی
+  - دستور خط فرمان: `torware mtproxy`
 - **پروکسی آنباندد (Unbounded/Lantern)** — اجرای پروکسی داوطلبانه WebRTC لنترن در کنار رله تور برای کمک به کاربران سانسورشده از طریق شبکه دوم ضد سانسور
   - ساخت از سورس‌کد هنگام ایجاد ایمیج داکر (قفل شده روی کامیت سازگار با سرور اصلی)
   - نمایش اتصالات زنده و کل اتصالات در داشبورد
   - مدیریت کامل از منو: شروع، توقف، ری‌استارت، غیرفعال‌سازی، تغییر منابع، حذف
   - دستور ربات تلگرام: `/tor_unbounded`
   - دستور خط فرمان: `torware unbounded`
-  - یکپارچه‌سازی با بررسی سلامت
-  - یکپارچه‌سازی با ویزارد نصب (مستقل یا به عنوان افزونه)
-  - بخش آموزشی درباره آنباندد/لنترن
-- **فشرده‌سازی آمار پیشرفته** — ادغام جداول آپلود/دانلود کشورها در یک جدول واحد، کاهش از ۱۰/۷ به ۵ کشور برتر
-- **اصلاح ردیف‌بندی جدول کانتینرها** — رفع مشکل تراز جدول با نام‌های طولانی کانتینر
-- **منوی مشاهده لاگ** شامل کانتینر آنباندد
+- **قفل نسخه ایمیج‌های داکر** — همه ایمیج‌ها از تگ نسخه خاص استفاده می‌کنند (بدون `:latest`)
+- **بهبودهای امنیتی**
+  - بارگذاری امن فایل تنظیمات (پارس صریح به جای source بش)
+  - نیاز به بش ۴.۲ به بالا برای مدیریت امن متغیرها
+  - بررسی سلامت برای همه کانتینرها
+- **لاگ JSON ساختاریافته** — فرمت اختیاری JSON برای یکپارچه‌سازی با سیستم‌های جمع‌آوری لاگ
+- **بهینه‌سازی داشبورد**
+  - واکشی موازی داده‌ها برای بازخوانی سریع‌تر
+  - محدود شدن نمودارها به ۵ مورد برتر
+  - یکپارچه‌سازی آمار MTProxy در تمام نماها
+- **فشرده‌سازی آمار پیشرفته** — ادغام جداول آپلود/دانلود کشورها در یک جدول واحد
+- **منوی مشاهده لاگ** شامل کانتینر آنباندد و MTProxy
 
 #### نسخه ۱.۰.۱ — وصله ویژگی
 - رفع نمایش N/A برای آپتایم در داشبورد
