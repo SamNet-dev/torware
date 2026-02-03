@@ -1,6 +1,6 @@
 # Torware
 
-One-click Tor Bridge/Relay node setup and management tool with live TUI dashboard, Snowflake proxy support, and Telegram notifications.
+One-click Tor Bridge/Relay node setup and management tool with live TUI dashboard, Snowflake proxy, Lantern Unbounded proxy, and Telegram notifications.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Linux-green.svg)
@@ -47,6 +47,13 @@ Run a Snowflake proxy alongside your relay to help censored users connect via We
 - Live connection and traffic stats on the dashboard
 - Independent start/stop from the main relay
 
+### Unbounded Proxy (Lantern)
+Run Lantern's Unbounded volunteer WebRTC proxy to help censored users through a second circumvention network:
+- Built from source automatically during setup
+- Live and all-time connection tracking
+- Independent management from the menu or CLI
+- No port forwarding needed (WebRTC)
+
 ### Multi-Container Support
 Run up to 5 Tor containers simultaneously:
 - Each container gets unique ORPort and ControlPort
@@ -57,7 +64,7 @@ Run up to 5 Tor containers simultaneously:
 ### Telegram Notifications
 - Setup wizard with guided BotFather integration
 - Periodic status reports (configurable interval + start hour)
-- Bot commands: `/tor_status`, `/tor_peers`, `/tor_uptime`, `/tor_containers`, `/tor_snowflake`, `/tor_start_N`, `/tor_stop_N`, `/tor_restart_N`, `/tor_help`
+- Bot commands: `/tor_status`, `/tor_peers`, `/tor_uptime`, `/tor_containers`, `/tor_snowflake`, `/tor_unbounded`, `/tor_start_N`, `/tor_stop_N`, `/tor_restart_N`, `/tor_help`
 - Alerts for high CPU, high RAM, all containers down, or zero connections
 - Daily and weekly summary reports
 - Uses `/tor_` prefix so the bot can be shared with other services
@@ -104,6 +111,7 @@ torware health          Run health check
 torware fingerprint     Show relay fingerprint(s)
 torware bridge-line     Show bridge line(s) for sharing
 torware snowflake       Snowflake proxy management
+torware unbounded       Unbounded proxy status
 torware backup          Backup Tor identity keys
 torware restore         Restore from backup
 torware uninstall       Remove Torware and containers
@@ -142,6 +150,7 @@ Snowflake does **not** need port forwarding — WebRTC handles NAT traversal aut
 | Bridge (obfs4) | `thetorproject/obfs4-bridge:latest` |
 | Middle/Exit Relay | `osminogin/tor-simple:latest` |
 | Snowflake Proxy | `thetorproject/snowflake-proxy:latest` |
+| Unbounded Proxy | `torware/unbounded-widget:latest` (built from source) |
 
 ## File Structure
 
@@ -175,6 +184,8 @@ Key settings:
 - `DATA_CAP` — monthly data cap (GB), 0 for unlimited
 - `SNOWFLAKE_ENABLED` — true/false
 - `SNOWFLAKE_CPUS` / `SNOWFLAKE_MEMORY` — Snowflake resource limits
+- `UNBOUNDED_ENABLED` — true/false
+- `UNBOUNDED_CPUS` / `UNBOUNDED_MEMORY` — Unbounded resource limits
 
 Per-container overrides: `RELAY_TYPE_N`, `BANDWIDTH_N`, `ORPORT_N` (where N is the container index).
 
@@ -194,10 +205,49 @@ Contributions are welcome. Please open an issue or pull request on GitHub.
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
+## Changelog
+
+### v1.1
+- **Lantern Unbounded Proxy** — Run Lantern's Unbounded volunteer WebRTC proxy alongside your relay to help censored users access the internet through a second censorship-circumvention network
+  - Built from source during Docker image creation (pinned to production-compatible commit)
+  - Live and all-time connection tracking on the dashboard
+  - Full menu management: start, stop, restart, disable, change resources, remove
+  - Telegram bot command: `/tor_unbounded`
+  - CLI command: `torware unbounded`
+  - Health check integration
+  - Setup wizard integration (standalone or as add-on to any relay type)
+  - About & Learn section explaining Unbounded/Lantern
+- **Compact advanced stats** — Merged upload/download country tables into a single combined traffic table, reduced from top 10/7 to top 5 to fit on one screen
+- **Container details alignment** — Fixed table alignment when container names are long (e.g. `snowflake-proxy-2`)
+- **View Logs** menu now includes Unbounded container
+
+### v1.0.1 — Feature Patch
+- Fixed dashboard uptime showing N/A
+- Added Snowflake traffic to dashboard totals
+- Capped Snowflake CPU limit to available cores
+- Increased relay startup check to 3 retries (15s total)
+- Fixed bridge line fingerprint replacement and PT port
+- Fixed bridge line parsing skipping blank lines
+- Fixed startup false failure, live map overflow
+- Added Snowflake advanced stats section
+
+### v1.0.0
+- Initial release with Bridge, Middle, and Exit relay support
+- Live TUI dashboard with 5-second refresh
+- Snowflake WebRTC proxy support
+- Multi-container support (up to 5)
+- Telegram bot notifications and commands
+- Background traffic tracker with country-level stats
+- 15-point health check
+- Built-in About & Learn educational section
+- CLI commands for all operations
+- Auto-install on Ubuntu, Debian, Fedora, CentOS, Arch, Alpine, and more
+
 ## Acknowledgments
 
 - [The Tor Project](https://www.torproject.org/) for building and maintaining the Tor network
 - [Snowflake](https://snowflake.torproject.org/) for the WebRTC pluggable transport
+- [Lantern](https://lantern.io/) for the Unbounded censorship-circumvention proxy
 - All Tor relay operators who keep the network running
 
 ---
@@ -230,6 +280,7 @@ curl -sL https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh | 
 
 - **داشبورد زنده** — نمایش لحظه‌ای مدارها، پهنای باند، مصرف CPU/RAM و کشور کاربران
 - **پروکسی اسنوفلیک (Snowflake)** — کمک به کاربران سانسورشده از طریق WebRTC بدون نیاز به Port Forwarding
+- **پروکسی آنباندد (Unbounded/Lantern)** — اجرای پروکسی داوطلبانه لنترن برای کمک به کاربران سانسورشده از طریق شبکه دوم ضد سانسور
 - **چند کانتینر** — تا ۵ کانتینر تور همزمان با انواع مختلف رله
 - **اعلان‌های تلگرام** — گزارش وضعیت خودکار و دستورات ربات
 - **بررسی سلامت** — ۱۵ نقطه تشخیصی برای اطمینان از عملکرد صحیح
@@ -274,6 +325,44 @@ curl -sL https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh | 
 - از حریم خصوصی خود محافظت کنند
 
 **هر بریج مهم است.** حتی یک بریج کوچک با پهنای باند محدود می‌تواند به ده‌ها نفر کمک کند.
+
+### تاریخچه تغییرات
+
+#### نسخه ۱.۱
+- **پروکسی آنباندد (Unbounded/Lantern)** — اجرای پروکسی داوطلبانه WebRTC لنترن در کنار رله تور برای کمک به کاربران سانسورشده از طریق شبکه دوم ضد سانسور
+  - ساخت از سورس‌کد هنگام ایجاد ایمیج داکر (قفل شده روی کامیت سازگار با سرور اصلی)
+  - نمایش اتصالات زنده و کل اتصالات در داشبورد
+  - مدیریت کامل از منو: شروع، توقف، ری‌استارت، غیرفعال‌سازی، تغییر منابع، حذف
+  - دستور ربات تلگرام: `/tor_unbounded`
+  - دستور خط فرمان: `torware unbounded`
+  - یکپارچه‌سازی با بررسی سلامت
+  - یکپارچه‌سازی با ویزارد نصب (مستقل یا به عنوان افزونه)
+  - بخش آموزشی درباره آنباندد/لنترن
+- **فشرده‌سازی آمار پیشرفته** — ادغام جداول آپلود/دانلود کشورها در یک جدول واحد، کاهش از ۱۰/۷ به ۵ کشور برتر
+- **اصلاح ردیف‌بندی جدول کانتینرها** — رفع مشکل تراز جدول با نام‌های طولانی کانتینر
+- **منوی مشاهده لاگ** شامل کانتینر آنباندد
+
+#### نسخه ۱.۰.۱ — وصله ویژگی
+- رفع نمایش N/A برای آپتایم در داشبورد
+- اضافه شدن ترافیک اسنوفلیک به مجموع داشبورد
+- محدود شدن CPU اسنوفلیک به هسته‌های موجود
+- افزایش تلاش بررسی راه‌اندازی رله به ۳ بار (۱۵ ثانیه)
+- رفع خط بریج: جایگزینی فینگرپرینت و استفاده از پورت PT
+- رفع پارس خط بریج: رد کردن خطوط خالی
+- رفع خطای نادرست شروع، سرریز نقشه زنده
+- اضافه شدن بخش آمار پیشرفته اسنوفلیک
+
+#### نسخه ۱.۰.۰
+- انتشار اولیه با پشتیبانی از بریج، رله میانی و رله خروجی
+- داشبورد زنده TUI با بازخوانی ۵ ثانیه‌ای
+- پشتیبانی از پروکسی اسنوفلیک WebRTC
+- پشتیبانی از چند کانتینر (تا ۵)
+- اعلان‌ها و دستورات ربات تلگرام
+- ردیاب ترافیک پس‌زمینه با آمار سطح کشور
+- بررسی سلامت ۱۵ نقطه‌ای
+- بخش آموزشی داخلی
+- دستورات خط فرمان برای تمام عملیات
+- نصب خودکار روی اوبونتو، دبیان، فدورا، سنت‌اواس، آرچ، آلپاین و بیشتر
 
 ### مجوز
 

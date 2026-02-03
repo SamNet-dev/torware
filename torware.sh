@@ -52,7 +52,7 @@ _cleanup_tmp() {
 }
 trap '_cleanup_tmp' EXIT
 
-VERSION="1.0"
+VERSION="1.1"
 # Docker image tags — using :latest for auto-updates. Pin to a specific tag for reproducibility.
 BRIDGE_IMAGE="thetorproject/obfs4-bridge:latest"
 RELAY_IMAGE="osminogin/tor-simple:latest"
@@ -94,6 +94,17 @@ SNOWFLAKE_CPUS_1=""
 SNOWFLAKE_MEMORY_1=""
 SNOWFLAKE_CPUS_2=""
 SNOWFLAKE_MEMORY_2=""
+
+# Unbounded (Lantern) proxy settings
+UNBOUNDED_ENABLED="false"
+UNBOUNDED_CONTAINER="unbounded-proxy"
+UNBOUNDED_VOLUME="unbounded-data"
+UNBOUNDED_IMAGE="torware/unbounded-widget:latest"
+UNBOUNDED_CPUS="0.5"
+UNBOUNDED_MEMORY="256m"
+UNBOUNDED_FREDDIE="https://bf-freddie.herokuapp.com"
+UNBOUNDED_EGRESS="wss://unbounded.iantem.io"
+UNBOUNDED_TAG=""
 
 # Colors — disable when stdout is not a terminal
 if [ -t 1 ]; then
@@ -714,6 +725,28 @@ get_snowflake_default_memory() {
     fi
 }
 
+get_unbounded_default_cpus() {
+    local cores=$(nproc 2>/dev/null || echo 1)
+    if [ "$cores" -ge 2 ]; then
+        echo "0.5"
+    else
+        echo "0.25"
+    fi
+}
+
+get_unbounded_default_memory() {
+    local total_mb=$(awk '/MemTotal/ {printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
+    if [ "$total_mb" -ge 1024 ]; then
+        echo "256m"
+    else
+        echo "128m"
+    fi
+}
+
+is_unbounded_running() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${UNBOUNDED_CONTAINER}$"
+}
+
 get_container_orport() {
     local idx=$1
     local var="ORPORT_${idx}"
@@ -1231,7 +1264,7 @@ prompt_relay_settings() {
     # ── Suggested Setup Modes ──
     echo -e "  ${BOLD}Choose a Setup Mode:${NC}"
     echo ""
-    echo -e "  ${DIM}Options 1-4 include the option to run Snowflake alongside your relay.${NC}"
+    echo -e "  ${DIM}Options 1-4 include the option to run Snowflake and/or Lantern alongside your relay.${NC}"
     echo ""
     echo -e "  ${GREEN}${BOLD}  1. Single Bridge${NC} (${BOLD}RECOMMENDED${NC})"
     echo -e "       1 obfs4 bridge container — ideal for most users"
@@ -1260,9 +1293,16 @@ prompt_relay_settings() {
     echo -e "       Helps censored users connect to Tor"
     echo -e "       Lightweight, no IP exposure, zero config"
     echo ""
+    echo -e "  ${CYAN}  6. Unbounded Only (Lantern)${NC}"
+    echo -e "       No Tor relay — just run Lantern Unbounded WebRTC proxy"
+    echo -e "       Helps censored users connect via Lantern network"
+    echo -e "       Lightweight, no IP exposure, zero config"
+    echo ""
+    echo -e "  ${DIM}  0. Exit${NC}"
+    echo ""
 
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
-    echo -e "  Choose setup mode [1-5] (default: 1)"
+    echo -e "  Choose setup mode [0-6] (default: 1)"
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     read -p "  mode: " input_mode < /dev/tty || true
 
@@ -1401,6 +1441,30 @@ prompt_relay_settings() {
             done
             echo -e "  Snowflake: ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
             ;;
+        6)
+            # Unbounded-only mode: no Tor relay
+            RELAY_TYPE="none"
+            CONTAINER_COUNT=0
+            UNBOUNDED_ENABLED="true"
+            echo -e "  Selected: ${CYAN}Unbounded Only${NC} (Lantern network, no Tor relay)"
+            echo ""
+            local _def_ub_cpu=$(get_unbounded_default_cpus)
+            local _def_ub_mem=$(get_unbounded_default_memory)
+            read -p "  CPU cores [${_def_ub_cpu}]: " _ub_cpu < /dev/tty || true
+            read -p "  RAM limit [${_def_ub_mem}]: " _ub_mem < /dev/tty || true
+            [ -z "$_ub_cpu" ] && _ub_cpu="$_def_ub_cpu"
+            [ -z "$_ub_mem" ] && _ub_mem="$_def_ub_mem"
+            [[ "$_ub_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _ub_cpu="$_def_ub_cpu"
+            [[ "$_ub_mem" =~ ^[0-9]+[mMgG]$ ]] || _ub_mem="$_def_ub_mem"
+            _ub_mem=$(echo "$_ub_mem" | tr '[:upper:]' '[:lower:]')
+            UNBOUNDED_CPUS="$_ub_cpu"
+            UNBOUNDED_MEMORY="$_ub_mem"
+            echo -e "  Unbounded: ${GREEN}Enabled${NC} (CPU: ${_ub_cpu}, RAM: ${_ub_mem})"
+            ;;
+        0)
+            echo -e "  ${YELLOW}Exiting setup.${NC}"
+            exit 0
+            ;;
         *)
             RELAY_TYPE="bridge"
             CONTAINER_COUNT=1
@@ -1408,7 +1472,7 @@ prompt_relay_settings() {
             ;;
     esac
 
-    # Skip relay config for snowflake-only mode
+    # Skip relay config for proxy-only modes (Snowflake-only or Unbounded-only)
     if [ "$RELAY_TYPE" = "none" ]; then
         # Jump to summary confirmation
         :
@@ -1634,6 +1698,35 @@ prompt_relay_settings() {
         echo -e "  Snowflake: ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
     fi
 
+    # ── Unbounded (Lantern) Proxy ──
+    echo ""
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}Unbounded Proxy (Lantern)${NC}"
+    echo -e "  Runs a lightweight WebRTC proxy alongside your relay."
+    echo -e "  Helps censored users connect via the Lantern network."
+    echo -e "  Very lightweight (~10MB RAM). No port forwarding needed."
+    echo -e "  ${DIM}Learn more: https://unbounded.lantern.io/${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    read -p "  Enable Unbounded proxy? [y/N] " input_ub < /dev/tty || true
+    if [[ "$input_ub" =~ ^[Yy]$ ]]; then
+        UNBOUNDED_ENABLED="true"
+        local _def_ub_cpu=$(get_unbounded_default_cpus)
+        local _def_ub_mem=$(get_unbounded_default_memory)
+        read -p "  CPU cores [${_def_ub_cpu}]: " _ub_cpu < /dev/tty || true
+        read -p "  RAM limit [${_def_ub_mem}]: " _ub_mem < /dev/tty || true
+        [ -z "$_ub_cpu" ] && _ub_cpu="$_def_ub_cpu"
+        [ -z "$_ub_mem" ] && _ub_mem="$_def_ub_mem"
+        [[ "$_ub_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _ub_cpu="$_def_ub_cpu"
+        [[ "$_ub_mem" =~ ^[0-9]+[mMgG]$ ]] || _ub_mem="$_def_ub_mem"
+        _ub_mem=$(echo "$_ub_mem" | tr '[:upper:]' '[:lower:]')
+        UNBOUNDED_CPUS="$_ub_cpu"
+        UNBOUNDED_MEMORY="$_ub_mem"
+        echo -e "  Unbounded: ${GREEN}Enabled${NC} (CPU: ${_ub_cpu}, RAM: ${_ub_mem})"
+    else
+        UNBOUNDED_ENABLED="false"
+        echo -e "  Unbounded: ${DIM}Disabled${NC}"
+    fi
+
     fi # end of relay-type != none block
 
     echo ""
@@ -1650,11 +1743,16 @@ prompt_relay_settings() {
         done
     fi
     if [ "$RELAY_TYPE" = "none" ]; then
-        echo -e "    Mode:        ${CYAN}Snowflake Only${NC}"
-        echo -e "    Snowflake:   ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
-        for _si in $(seq 1 ${SNOWFLAKE_COUNT}); do
-            echo -e "      Instance #${_si}: CPU $(get_snowflake_cpus $_si), RAM $(get_snowflake_memory $_si)"
-        done
+        echo -e "    Mode:        ${CYAN}Proxy Only${NC}"
+        if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+            echo -e "    Snowflake:   ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
+            for _si in $(seq 1 ${SNOWFLAKE_COUNT}); do
+                echo -e "      Instance #${_si}: CPU $(get_snowflake_cpus $_si), RAM $(get_snowflake_memory $_si)"
+            done
+        fi
+        if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+            echo -e "    Unbounded:   ${GREEN}Enabled${NC} (CPU: ${UNBOUNDED_CPUS:-0.5}, RAM: ${UNBOUNDED_MEMORY:-256m})"
+        fi
     else
         if [ "$has_mixed" = "true" ]; then
             echo -e "    Relay Types:"
@@ -1696,6 +1794,9 @@ prompt_relay_settings() {
         if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
             echo -e "    Snowflake:   ${GREEN}${SNOWFLAKE_COUNT} instance(s)${NC}"
         fi
+        if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+            echo -e "    Unbounded:   ${GREEN}Enabled${NC} (CPU: ${UNBOUNDED_CPUS:-0.5}, RAM: ${UNBOUNDED_MEMORY:-256m})"
+        fi
     fi
     # Show auto-calculated resource limits (only for relay modes)
     if [ "${CONTAINER_COUNT:-0}" -gt 0 ]; then
@@ -1735,6 +1836,14 @@ save_settings() {
     local _caller_snowflake_enabled="${SNOWFLAKE_ENABLED:-false}"
     local _caller_snowflake_cpus="${SNOWFLAKE_CPUS:-1.0}"
     local _caller_snowflake_memory="${SNOWFLAKE_MEMORY:-256m}"
+
+    # Capture Unbounded globals
+    local _caller_unbounded_enabled="${UNBOUNDED_ENABLED:-false}"
+    local _caller_unbounded_cpus="${UNBOUNDED_CPUS:-0.5}"
+    local _caller_unbounded_memory="${UNBOUNDED_MEMORY:-256m}"
+    local _caller_unbounded_freddie="${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}"
+    local _caller_unbounded_egress="${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}"
+    local _caller_unbounded_tag="${UNBOUNDED_TAG:-}"
 
     # Preserve existing Telegram settings on reinstall
     local _caller_tg_token="${TELEGRAM_BOT_TOKEN:-}"
@@ -1782,6 +1891,14 @@ save_settings() {
     SNOWFLAKE_MEMORY_1="$_caller_snowflake_memory_1"
     SNOWFLAKE_CPUS_2="$_caller_snowflake_cpus_2"
     SNOWFLAKE_MEMORY_2="$_caller_snowflake_memory_2"
+
+    # Restore unbounded globals after load_settings clobbered them
+    UNBOUNDED_ENABLED="$_caller_unbounded_enabled"
+    UNBOUNDED_CPUS="$_caller_unbounded_cpus"
+    UNBOUNDED_MEMORY="$_caller_unbounded_memory"
+    UNBOUNDED_FREDDIE="$_caller_unbounded_freddie"
+    UNBOUNDED_EGRESS="$_caller_unbounded_egress"
+    UNBOUNDED_TAG="$_caller_unbounded_tag"
 
     # Restore ALL telegram globals after load_settings clobbered them
     TELEGRAM_BOT_TOKEN="$_tg_token"
@@ -1832,6 +1949,14 @@ SNOWFLAKE_CPUS_1='${SNOWFLAKE_CPUS_1}'
 SNOWFLAKE_MEMORY_1='${SNOWFLAKE_MEMORY_1}'
 SNOWFLAKE_CPUS_2='${SNOWFLAKE_CPUS_2}'
 SNOWFLAKE_MEMORY_2='${SNOWFLAKE_MEMORY_2}'
+
+# Unbounded (Lantern) Proxy
+UNBOUNDED_ENABLED='${UNBOUNDED_ENABLED:-false}'
+UNBOUNDED_CPUS='${UNBOUNDED_CPUS:-0.5}'
+UNBOUNDED_MEMORY='${UNBOUNDED_MEMORY:-256m}'
+UNBOUNDED_FREDDIE='${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}'
+UNBOUNDED_EGRESS='${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}'
+UNBOUNDED_TAG='${UNBOUNDED_TAG}'
 
 # Telegram Integration
 TELEGRAM_BOT_TOKEN='${_safe_tg_token}'
@@ -2032,14 +2157,18 @@ run_relay_container() {
 run_all_containers() {
     local count=${CONTAINER_COUNT:-1}
 
-    # Snowflake-only mode: skip relay containers entirely
+    # Proxy-only mode: skip relay containers entirely
     if [ "$count" -le 0 ] 2>/dev/null || [ "$RELAY_TYPE" = "none" ]; then
-        log_info "Starting Torware (Snowflake only)..."
+        log_info "Starting Torware (proxy-only mode)..."
         run_all_snowflake_containers
-        if is_snowflake_running; then
-            log_success "Snowflake proxy started (${SNOWFLAKE_COUNT:-1} instance(s))"
+        run_unbounded_container
+        local _any_proxy=false
+        is_snowflake_running && _any_proxy=true
+        is_unbounded_running && _any_proxy=true
+        if [ "$_any_proxy" = "true" ]; then
+            log_success "Proxy containers started"
         else
-            log_error "Snowflake proxy failed to start"
+            log_error "No proxy containers started"
             exit 1
         fi
         return 0
@@ -2078,6 +2207,9 @@ run_all_containers() {
 
     # Start Snowflake proxy if enabled
     run_all_snowflake_containers
+
+    # Start Unbounded proxy if enabled
+    run_unbounded_container
 
     # Wait for relay container to be running and bootstrapping
     local _retries=0
@@ -2391,6 +2523,148 @@ get_snowflake_country_stats() {
 }
 
 #═══════════════════════════════════════════════════════════════════════
+# Unbounded (Lantern) Proxy Container Lifecycle
+#═══════════════════════════════════════════════════════════════════════
+
+build_unbounded_image() {
+    if docker image inspect "$UNBOUNDED_IMAGE" &>/dev/null; then
+        return 0
+    fi
+    log_info "Building Unbounded widget image (this may take a few minutes on first run)..."
+
+    # Pin to commit b53a6690f363 (May 2025) — matches production freddie server (v0.0.2 protocol)
+    # The main branch has v2.x which is rejected by production servers still running v0.x
+    log_info "Building unbounded widget (pinned to production-compatible commit)..."
+
+    local build_dir
+    build_dir=$(mktemp -d)
+    cat > "${build_dir}/Dockerfile" <<'DOCKERFILE'
+FROM golang:1.24-alpine AS builder
+RUN apk add --no-cache git
+WORKDIR /src
+RUN git clone https://github.com/getlantern/unbounded.git . && git checkout b53a6690f363
+WORKDIR /src/cmd
+RUN go build -o /go/bin/widget --ldflags="-X 'main.clientType=widget'"
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates procps
+COPY --from=builder /go/bin/widget /usr/local/bin/widget
+ENTRYPOINT ["widget"]
+DOCKERFILE
+    if ! docker build -t "$UNBOUNDED_IMAGE" "$build_dir"; then
+        log_error "Failed to build Unbounded image."
+        rm -rf "$build_dir"
+        return 1
+    fi
+    rm -rf "$build_dir"
+    log_success "Unbounded image built: $UNBOUNDED_IMAGE"
+}
+
+run_unbounded_container() {
+    if [ "$UNBOUNDED_ENABLED" != "true" ]; then
+        return 0
+    fi
+
+    local cname="$UNBOUNDED_CONTAINER"
+    local vname="$UNBOUNDED_VOLUME"
+    local ub_cpus="${UNBOUNDED_CPUS:-0.5}"
+    local ub_memory="${UNBOUNDED_MEMORY:-256m}"
+    local ub_tag="${UNBOUNDED_TAG:-torware-$(hostname 2>/dev/null || echo node)}"
+
+    log_info "Starting Unbounded proxy ($cname)..."
+
+    build_unbounded_image || return 1
+
+    # Remove existing
+    docker rm -f "$cname" 2>/dev/null || true
+
+    # Ensure volume exists
+    docker volume create "$vname" 2>/dev/null || true
+
+    if ! docker run -d \
+        --name "$cname" \
+        --restart unless-stopped \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        --cpus "$(awk -v req="${ub_cpus}" -v cores="$(nproc 2>/dev/null || echo 1)" 'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')" \
+        --memory "${ub_memory}" \
+        --memory-swap "${ub_memory}" \
+        --health-cmd "pgrep widget || exit 1" \
+        --health-interval=300s \
+        --health-timeout=10s \
+        --health-retries=5 \
+        --health-start-period=60s \
+        -e "FREDDIE=${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}" \
+        -e "EGRESS=${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}" \
+        -e "TAG=${ub_tag}" \
+        -v "${vname}:/var/lib/unbounded" \
+        "$UNBOUNDED_IMAGE"; then
+        log_error "Failed to start Unbounded proxy ($cname)"
+        return 1
+    fi
+    log_success "Unbounded proxy started: $cname"
+}
+
+stop_unbounded_container() {
+    local cname="$UNBOUNDED_CONTAINER"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+        docker stop --timeout 10 "$cname" 2>/dev/null || true
+        log_success "$cname stopped"
+    fi
+}
+
+start_unbounded_container() {
+    if [ "$UNBOUNDED_ENABLED" != "true" ]; then
+        return 0
+    fi
+    local cname="$UNBOUNDED_CONTAINER"
+    if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
+        if docker start "$cname" 2>/dev/null; then
+            log_success "$cname started"
+        else
+            log_warn "Failed to start $cname, recreating..."
+            run_unbounded_container
+        fi
+    else
+        run_unbounded_container
+    fi
+}
+
+restart_unbounded_container() {
+    if [ "$UNBOUNDED_ENABLED" != "true" ]; then
+        return 0
+    fi
+    local cname="$UNBOUNDED_CONTAINER"
+    docker rm -f "$cname" 2>/dev/null || true
+    run_unbounded_container
+}
+
+get_unbounded_stats() {
+    # Returns: "live_connections all_time_connections"
+    local cname="$UNBOUNDED_CONTAINER"
+
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+        echo "0 0"
+        return
+    fi
+
+    local live=0 total=0
+
+    # Parse widget log messages for connection events
+    local log_data
+    log_data=$(docker logs "$cname" 2>&1)
+    if [ -n "$log_data" ]; then
+        local opened=$(echo "$log_data" | grep -c "datachannel has opened" 2>/dev/null || echo 0)
+        local closed=$(echo "$log_data" | grep -c "datachannel has closed" 2>/dev/null || echo 0)
+        total=${opened:-0}
+        live=$(( ${opened:-0} - ${closed:-0} ))
+        [ "$live" -lt 0 ] && live=0
+    fi
+
+    echo "${live:-0} ${total:-0}"
+}
+
+#═══════════════════════════════════════════════════════════════════════
 # Status Display
 #═══════════════════════════════════════════════════════════════════════
 
@@ -2505,6 +2779,21 @@ show_status() {
         echo ""
     fi
 
+    # Unbounded status
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+        echo -e "  ${BOLD}Unbounded Proxy (Lantern):${NC}"
+        if is_unbounded_running; then
+            local ub_stats=$(get_unbounded_stats 2>/dev/null)
+            local ub_live=$(echo "$ub_stats" | awk '{print $1}')
+            local ub_total=$(echo "$ub_stats" | awk '{print $2}')
+            echo -e "    Status: ${GREEN}RUNNING${NC}"
+            echo -e "    Live connections: ${ub_live:-0}  |  All-time: ${ub_total:-0}"
+        else
+            echo -e "    Status: ${RED}STOPPED${NC}"
+        fi
+        echo ""
+    fi
+
     # Include snowflake in totals
     local total_containers=$count
     local total_running=$running
@@ -2517,6 +2806,12 @@ show_status() {
             local sf_out=$(echo "$sf_stats" | awk '{print $3}')
             total_read=$((total_read + ${sf_in:-0}))
             total_written=$((total_written + ${sf_out:-0}))
+        fi
+    fi
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+        total_containers=$((total_containers + 1))
+        if is_unbounded_running; then
+            total_running=$((total_running + 1))
         fi
     fi
 
@@ -3046,6 +3341,29 @@ health_check() {
         done
     fi
 
+    # Unbounded proxy health
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+        local _ubn="$UNBOUNDED_CONTAINER"
+        echo ""
+        echo -e "  ${BOLD}--- ${_ubn} ---${NC}"
+
+        echo -n "  Container running:    "
+        if is_unbounded_running; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}STOPPED${NC}"
+            all_ok=false
+        fi
+
+        echo -n "  Process alive:        "
+        if docker exec "$_ubn" pgrep widget &>/dev/null; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}NOT RUNNING${NC}"
+            all_ok=false
+        fi
+    fi
+
     echo ""
     if [ "$all_ok" = "true" ]; then
         echo -e "  ${GREEN}✓ All health checks passed${NC}"
@@ -3166,6 +3484,11 @@ show_dashboard() {
         # Collect stats from all containers in parallel
         local _tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/.tor_dash.${_dash_pid}.XXXXXX")
 
+        # Cache docker ps once per cycle
+        local _running_containers
+        _running_containers=$(docker ps --format '{{.Names}}' 2>/dev/null)
+        echo "$_running_containers" > "$_tmpdir/ps_cache"
+
         # ControlPort queries in parallel per container
         # Note: subshells inherit env (including TELEGRAM_BOT_TOKEN) but only write to temp files
         for i in $(seq 1 $count); do
@@ -3174,7 +3497,7 @@ show_dashboard() {
                 local port=$(get_container_controlport $i)
                 local running=0
 
-                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+                if echo "$_running_containers" | grep -q "^${cname}$"; then
                     running=1
 
                     # Uptime
@@ -3209,9 +3532,22 @@ show_dashboard() {
             ) &
         done
 
-        # System stats in parallel
+        # System stats + proxy stats in parallel
         ( get_container_stats > "$_tmpdir/cstats" ) &
         ( get_net_speed > "$_tmpdir/net" ) &
+        if [ "$SNOWFLAKE_ENABLED" = "true" ] && echo "$_running_containers" | grep -q "^snowflake-proxy$"; then
+            ( get_snowflake_stats > "$_tmpdir/sf_stats" ) 2>/dev/null &
+            ( get_snowflake_country_stats > "$_tmpdir/sf_countries" ) 2>/dev/null &
+        fi
+        if [ "$UNBOUNDED_ENABLED" = "true" ] && echo "$_running_containers" | grep -q "^${UNBOUNDED_CONTAINER}$"; then
+            ( get_unbounded_stats > "$_tmpdir/ub_stats" ) 2>/dev/null &
+        fi
+        if [ "${DATA_CAP_GB}" -gt 0 ] 2>/dev/null; then
+            ( controlport_query "$(get_container_controlport 1)" \
+                "GETINFO accounting/bytes" \
+                "GETINFO accounting/bytes-left" \
+                "GETINFO accounting/interval-end" > "$_tmpdir/acct" ) 2>/dev/null &
+        fi
         wait
 
         # Aggregate
@@ -3235,11 +3571,12 @@ show_dashboard() {
             fi
         done
 
-        # Include snowflake in totals
-        if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running 2>/dev/null; then
-            local _sf_stats=$(get_snowflake_stats 2>/dev/null)
-            local _sf_in=$(echo "$_sf_stats" | awk '{print $2}'); _sf_in=${_sf_in:-0}
-            local _sf_out=$(echo "$_sf_stats" | awk '{print $3}'); _sf_out=${_sf_out:-0}
+        # Include snowflake in totals (from parallel-fetched cache)
+        local _cached_sf_stats=""
+        if [ -f "$_tmpdir/sf_stats" ]; then
+            _cached_sf_stats=$(cat "$_tmpdir/sf_stats")
+            local _sf_in=$(echo "$_cached_sf_stats" | awk '{print $2}'); _sf_in=${_sf_in:-0}
+            local _sf_out=$(echo "$_cached_sf_stats" | awk '{print $3}'); _sf_out=${_sf_out:-0}
             total_read=$((total_read + _sf_in))
             total_written=$((total_written + _sf_out))
         fi
@@ -3252,7 +3589,6 @@ show_dashboard() {
         # Resource stats
         local stats=$(cat "$_tmpdir/cstats" 2>/dev/null)
         local net_speed=$(cat "$_tmpdir/net" 2>/dev/null)
-        rm -rf "$_tmpdir"
 
         # Normalize App CPU
         local raw_app_cpu=$(echo "$stats" | awk '{print $1}' | tr -d '%')
@@ -3297,13 +3633,14 @@ show_dashboard() {
             echo -e "${BOLD}Status:${NC} ${GREEN}Running${NC} (${uptime_str})${EL}"
             echo -e "  Containers: ${GREEN}${running}${NC}/${count}    Circuits: ${GREEN}${total_circuits}${NC}    Connections: ${GREEN}${total_conns}${NC}${EL}"
 
-            # Add snowflake traffic to totals
-            if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
-                local _sf_t=$(get_snowflake_stats 2>/dev/null)
-                local _sf_tin=$(echo "$_sf_t" | awk '{print $2}')
-                local _sf_tout=$(echo "$_sf_t" | awk '{print $3}')
-                total_read=$((total_read + ${_sf_tin:-0}))
-                total_written=$((total_written + ${_sf_tout:-0}))
+            # Include unbounded in totals (from parallel-fetched cache)
+            local _cached_ub_stats=""
+            if [ -f "$_tmpdir/ub_stats" ]; then
+                _cached_ub_stats=$(cat "$_tmpdir/ub_stats")
+                local _ub_in=$(echo "$_cached_ub_stats" | awk '{print $2}'); _ub_in=${_ub_in:-0}
+                local _ub_out=$(echo "$_cached_ub_stats" | awk '{print $3}'); _ub_out=${_ub_out:-0}
+                total_read=$((total_read + _ub_in))
+                total_written=$((total_written + _ub_out))
             fi
 
             echo -e "${EL}"
@@ -3323,15 +3660,12 @@ show_dashboard() {
             local _tx=$(printf '%-10s' "$tx_mbps")
             echo -e "  Total:   Net: ${YELLOW}↓ ${_rx}Mbps  ↑ ${_tx}Mbps${NC}${EL}"
 
-            # Data cap from Tor accounting
+            # Data cap from Tor accounting (from parallel-fetched cache)
             if [ "${DATA_CAP_GB}" -gt 0 ] 2>/dev/null; then
                 echo -e "${EL}"
                 echo -e "${CYAN}═══ DATA CAP ═══${NC}${EL}"
                 local acct_result
-                acct_result=$(controlport_query "$(get_container_controlport 1)" \
-                    "GETINFO accounting/bytes" \
-                    "GETINFO accounting/bytes-left" \
-                    "GETINFO accounting/interval-end" 2>/dev/null)
+                acct_result=$(cat "$_tmpdir/acct" 2>/dev/null)
                 local acct_bytes=$(echo "$acct_result" | sed -n 's/.*accounting\/bytes=\([^\r]*\)/\1/p' | head -1 2>/dev/null)
                 local acct_left=$(echo "$acct_result" | sed -n 's/.*accounting\/bytes-left=\([^\r]*\)/\1/p' | head -1 2>/dev/null)
                 local acct_end=$(echo "$acct_result" | sed -n 's/.*accounting\/interval-end=\([^\r]*\)/\1/p' | head -1 2>/dev/null)
@@ -3457,9 +3791,9 @@ show_dashboard() {
             fi
 
             echo -e "${EL}"
-        elif [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+        elif [ "$SNOWFLAKE_ENABLED" = "true" ] && [ -f "$_tmpdir/sf_stats" ]; then
             # Snowflake-only mode (no relay containers)
-            local _sf_only_t=$(get_snowflake_stats 2>/dev/null)
+            local _sf_only_t="$_cached_sf_stats"
             local _sf_only_in=$(echo "$_sf_only_t" | awk '{print $2}')
             local _sf_only_out=$(echo "$_sf_only_t" | awk '{print $3}')
             echo -e "${BOLD}Status:${NC} ${GREEN}Running (Snowflake only)${NC}${EL}"
@@ -3474,20 +3808,20 @@ show_dashboard() {
             echo -e "${EL}"
         fi
 
-        # Snowflake stats
+        # Snowflake stats (from parallel-fetched cache)
         if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
             local _sf_label="Snowflake Proxy (WebRTC)"
             [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_label="Snowflake Proxy (WebRTC) x${SNOWFLAKE_COUNT}"
             echo -e "${CYAN}═══ ${_sf_label} ═══${NC}${EL}"
-            if is_snowflake_running; then
-                local sf_stats=$(get_snowflake_stats 2>/dev/null)
+            if [ -f "$_tmpdir/sf_stats" ]; then
+                local sf_stats="$_cached_sf_stats"
                 local sf_conns=$(echo "$sf_stats" | awk '{print $1}')
                 local sf_in=$(echo "$sf_stats" | awk '{print $2}')
                 local sf_out=$(echo "$sf_stats" | awk '{print $3}')
                 echo -e "  Status: ${GREEN}Running${NC}  Connections: ${GREEN}${sf_conns:-0}${NC}  Traffic: ↓ $(format_bytes ${sf_in:-0})  ↑ $(format_bytes ${sf_out:-0})${EL}"
 
                 # Snowflake country breakdown (top 5)
-                local sf_countries=$(get_snowflake_country_stats 2>/dev/null | head -5)
+                local sf_countries=$(cat "$_tmpdir/sf_countries" 2>/dev/null | head -5)
                 if [ -n "$sf_countries" ]; then
                     local sf_total=0
                     while IFS='|' read -r cnt co; do
@@ -3507,24 +3841,40 @@ show_dashboard() {
             echo -e "${EL}"
         fi
 
-        # Per-container status (compact)
+        # Unbounded (Lantern) stats (from parallel-fetched cache)
+        if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+            echo -e "${CYAN}═══ Unbounded Proxy (Lantern) ═══${NC}${EL}"
+            if [ -f "$_tmpdir/ub_stats" ]; then
+                local ub_stats="$_cached_ub_stats"
+                local ub_live=$(echo "$ub_stats" | awk '{print $1}')
+                local ub_total=$(echo "$ub_stats" | awk '{print $2}')
+                echo -e "  Status: ${GREEN}Running${NC}  Live: ${GREEN}${ub_live:-0}${NC}  All-time: ${ub_total:-0}${EL}"
+            else
+                echo -e "  Status: ${RED}Stopped${NC}${EL}"
+            fi
+            echo -e "${EL}"
+        fi
+
+        # Per-container status (compact) — reuse parallel-fetched data
         if [ "$count" -gt 1 ]; then
             echo -e "${CYAN}═══ Per-Container ═══${NC}${EL}"
             for i in $(seq 1 $count); do
                 local cname=$(get_container_name $i)
                 local c_status="${RED}STOP${NC}"
                 local c_info=""
-                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
-                    c_status="${GREEN} UP ${NC}"
-                    local t=$(get_tor_traffic $i)
-                    local rb=$(echo "$t" | awk '{print $1}')
-                    local wb=$(echo "$t" | awk '{print $2}')
-                    c_info="↓$(format_bytes $rb) ↑$(format_bytes $wb) C:$(get_tor_circuits $i)"
+                if [ -f "$_tmpdir/c_${i}" ]; then
+                    read -r c_run c_rb c_wb c_circ c_conn c_start < "$_tmpdir/c_${i}"
+                    if [ "${c_run:-0}" = "1" ]; then
+                        c_status="${GREEN} UP ${NC}"
+                        c_info="↓$(format_bytes ${c_rb:-0}) ↑$(format_bytes ${c_wb:-0}) C:${c_circ:-0}"
+                    fi
                 fi
                 printf "  %-14s [${c_status}] %s${EL}\n" "$cname" "$c_info"
             done
             echo -e "${EL}"
         fi
+
+        rm -rf "$_tmpdir"
 
         echo -e "${BOLD}Refreshes every 5 seconds. Press any key to return to menu...${NC}${EL}"
 
@@ -3577,55 +3927,119 @@ show_advanced_stats() {
 
         # Per-container detailed stats
         echo -e "${CYAN}═══ Container Details ═══${NC}${EL}"
-        printf "  ${BOLD}%-14s %-8s %-10s %-10s %-8s %-8s %-8s${NC}${EL}\n" "Name" "Status" "Download" "Upload" "Circuits" "Conns" "CPU"
+        printf "  ${BOLD}%-18s %-8s %-10s %-10s %-8s %-8s %-8s${NC}${EL}\n" "Name" "Status" "Download" "Upload" "Circuits" "Conns" "CPU"
 
+        # Cache docker ps and docker stats once
+        local _adv_running
+        _adv_running=$(docker ps --format '{{.Names}}' 2>/dev/null)
         local docker_stats_out
         docker_stats_out=$(timeout 10 docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" 2>/dev/null)
+
+        # Parallel ControlPort queries for all containers
+        local _adv_tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/.tor_adv.$$.XXXXXX")
+        for i in $(seq 1 $count); do
+            (
+                local cname=$(get_container_name $i)
+                local port=$(get_container_controlport $i)
+                if echo "$_adv_running" | grep -q "^${cname}$"; then
+                    local result
+                    result=$(controlport_query "$port" \
+                        "GETINFO traffic/read" \
+                        "GETINFO traffic/written" \
+                        "GETINFO circuit-status" \
+                        "GETINFO orconn-status" 2>/dev/null)
+                    local rb=$(echo "$result" | sed -n 's/.*traffic\/read=\([0-9]*\).*/\1/p' | head -1 2>/dev/null || echo "0")
+                    local wb=$(echo "$result" | sed -n 's/.*traffic\/written=\([0-9]*\).*/\1/p' | head -1 2>/dev/null || echo "0")
+                    local circ=$(echo "$result" | grep -cE '^[0-9]+ (BUILT|EXTENDED|LAUNCHED)' 2>/dev/null || echo "0")
+                    local conn=$(echo "$result" | grep -c '\$' 2>/dev/null || echo "0")
+                    rb=${rb//[^0-9]/}; rb=${rb:-0}
+                    wb=${wb//[^0-9]/}; wb=${wb:-0}
+                    circ=${circ//[^0-9]/}; circ=${circ:-0}
+                    conn=${conn//[^0-9]/}; conn=${conn:-0}
+                    echo "1 $rb $wb $circ $conn" > "$_adv_tmpdir/c_${i}"
+                else
+                    echo "0 0 0 0 0" > "$_adv_tmpdir/c_${i}"
+                fi
+            ) &
+        done
+        # Snowflake + Unbounded stats in parallel too
+        if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+            for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                ( get_snowflake_instance_stats $_sfi > "$_adv_tmpdir/sf_${_sfi}" ) 2>/dev/null &
+            done
+            ( get_snowflake_country_stats > "$_adv_tmpdir/sf_countries" ) 2>/dev/null &
+        fi
+        if [ "$UNBOUNDED_ENABLED" = "true" ] && echo "$_adv_running" | grep -q "^${UNBOUNDED_CONTAINER}$"; then
+            ( get_unbounded_stats > "$_adv_tmpdir/ub_stats" ) 2>/dev/null &
+        fi
+        wait
 
         for i in $(seq 1 $count); do
             local cname=$(get_container_name $i)
             local status="${RED}STOPPED${NC}"
-            local dl="" ul="" circ="" conn="" cpu="" ram=""
+            local dl="" ul="" circ="" conn="" cpu=""
 
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
-                status="${GREEN}RUNNING${NC}"
-                local t=$(get_tor_traffic $i)
-                dl=$(format_bytes $(echo "$t" | awk '{print $1}'))
-                ul=$(format_bytes $(echo "$t" | awk '{print $2}'))
-                circ=$(get_tor_circuits $i)
-                conn=$(get_tor_connections $i)
-                cpu=$(echo "$docker_stats_out" | grep "^${cname} " | awk '{print $2}')
+            if [ -f "$_adv_tmpdir/c_${i}" ]; then
+                read -r _arun _arb _awb _acirc _aconn < "$_adv_tmpdir/c_${i}"
+                if [ "${_arun:-0}" = "1" ]; then
+                    status="${GREEN}RUNNING${NC}"
+                    dl=$(format_bytes ${_arb:-0})
+                    ul=$(format_bytes ${_awb:-0})
+                    circ=${_acirc:-0}
+                    conn=${_aconn:-0}
+                    cpu=$(echo "$docker_stats_out" | grep "^${cname} " | awk '{print $2}')
+                fi
             fi
-            printf "  %-14s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
+            printf "  %-18s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
                 "$cname" "$status" "${dl:-–}" "${ul:-–}" "${circ:-–}" "${conn:-–}" "${cpu:-–}"
         done
 
-        # Snowflake rows in advanced stats (one per instance)
+        # Snowflake rows (from cached parallel data)
         if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
             for _sfi in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
                 local _sf_cname=$(get_snowflake_name $_sfi)
                 local sf_status="${RED}STOPPED${NC}"
                 local sf_dl="" sf_ul="" sf_conns_adv="" sf_cpu=""
-                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sf_cname}$"; then
+                if echo "$_adv_running" | grep -q "^${_sf_cname}$"; then
                     sf_status="${GREEN}RUNNING${NC}"
-                    local sf_s=$(get_snowflake_instance_stats $_sfi 2>/dev/null)
-                    sf_conns_adv=$(echo "$sf_s" | awk '{print $1}')
-                    sf_dl=$(format_bytes $(echo "$sf_s" | awk '{print $2}'))
-                    sf_ul=$(format_bytes $(echo "$sf_s" | awk '{print $3}'))
+                    if [ -f "$_adv_tmpdir/sf_${_sfi}" ]; then
+                        local sf_s=$(cat "$_adv_tmpdir/sf_${_sfi}")
+                        sf_conns_adv=$(echo "$sf_s" | awk '{print $1}')
+                        sf_dl=$(format_bytes $(echo "$sf_s" | awk '{print $2}'))
+                        sf_ul=$(format_bytes $(echo "$sf_s" | awk '{print $3}'))
+                    fi
                     sf_cpu=$(echo "$docker_stats_out" | grep "^${_sf_cname} " | awk '{print $2}')
                 fi
-                printf "  %-14s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
+                printf "  %-18s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
                     "$_sf_cname" "$sf_status" "${sf_dl:-–}" "${sf_ul:-–}" "${sf_conns_adv:-–}" "–" "${sf_cpu:-–}"
             done
         fi
 
+        # Unbounded row (from cached parallel data)
+        if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+            local _ub_cname="$UNBOUNDED_CONTAINER"
+            local ub_status="${RED}STOPPED${NC}"
+            local ub_live_adv=0 ub_total_adv=0 ub_cpu=""
+            if echo "$_adv_running" | grep -q "^${_ub_cname}$"; then
+                ub_status="${GREEN}RUNNING${NC}"
+                if [ -f "$_adv_tmpdir/ub_stats" ]; then
+                    local ub_s=$(cat "$_adv_tmpdir/ub_stats")
+                    ub_live_adv=$(echo "$ub_s" | awk '{print $1}')
+                    ub_total_adv=$(echo "$ub_s" | awk '{print $2}')
+                fi
+                ub_cpu=$(echo "$docker_stats_out" | grep "^${_ub_cname} " | awk '{print $2}')
+            fi
+            printf "  %-18s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
+                "$_ub_cname" "$ub_status" "–" "–" "–" "${ub_live_adv:-0}" "${ub_cpu:-–}"
+        fi
+
         echo -e "${EL}"
 
-        # Snowflake detailed stats
-        if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+        # Snowflake detailed stats (from cached parallel data)
+        if [ "$SNOWFLAKE_ENABLED" = "true" ] && echo "$_adv_running" | grep -q "^snowflake-proxy$"; then
             echo -e "${CYAN}═══ Snowflake Proxy Details ═══${NC}${EL}"
             local _adv_sf_country
-            _adv_sf_country=$(get_snowflake_country_stats 2>/dev/null)
+            _adv_sf_country=$(cat "$_adv_tmpdir/sf_countries" 2>/dev/null)
             if [ -n "$_adv_sf_country" ]; then
                 local _adv_sf_total=0
                 while IFS='|' read -r _asc _asco; do
@@ -3633,9 +4047,9 @@ show_advanced_stats() {
                 done <<< "$_adv_sf_country"
                 [ "$_adv_sf_total" -eq 0 ] && _adv_sf_total=1
 
-                echo -e "  ${BOLD}Top 10 Countries by Connections${NC}${EL}"
+                echo -e "  ${BOLD}Top 5 Countries by Connections${NC}${EL}"
                 printf "  ${BOLD}%-20s %8s %6s   %-20s${NC}${EL}\n" "Country" "Conns" "Pct" "Activity"
-                echo "$_adv_sf_country" | head -10 | while IFS='|' read -r _asc _asco; do
+                echo "$_adv_sf_country" | head -5 | while IFS='|' read -r _asc _asco; do
                     [ -z "$_asco" ] && continue
                     _asco=$(country_code_to_name "$_asco")
                     local _aspct=$((_asc * 100 / _adv_sf_total))
@@ -3652,53 +4066,32 @@ show_advanced_stats() {
         local ips_file="$STATS_DIR/cumulative_ips"
 
         if [ -s "$data_file" ]; then
-            echo -e "${CYAN}═══ Top 7 Countries by Upload (All-Time) ═══${NC}${EL}"
-            local all_upload
-            all_upload=$(awk -F'|' '{if($1!="" && $3+0>0) print $3"|"$1}' "$data_file" 2>/dev/null | sort -t'|' -k1 -nr)
-            local top7_upload=$(echo "$all_upload" | head -7)
-            local total_upload=0
-            if [ -n "$all_upload" ]; then
-                while IFS='|' read -r bytes co; do
-                    bytes=$(printf '%.0f' "${bytes:-0}" 2>/dev/null) || bytes=0
-                    total_upload=$((total_upload + bytes))
-                done <<< "$all_upload"
+            echo -e "${CYAN}═══ Top 5 Countries by Traffic (All-Time) ═══${NC}${EL}"
+            # Combine upload+download per country, sort by total
+            local _combined_traffic
+            _combined_traffic=$(awk -F'|' '{if($1!="") { dl[$1]+=$2; ul[$1]+=$3 }} END { for(c in dl) printf "%d|%d|%s\n", dl[c]+ul[c], ul[c], c }' "$data_file" 2>/dev/null | sort -t'|' -k1 -nr)
+            local top5_traffic=$(echo "$_combined_traffic" | head -5)
+            local _total_traffic=0
+            if [ -n "$_combined_traffic" ]; then
+                while IFS='|' read -r tot rest; do
+                    tot=$(printf '%.0f' "${tot:-0}" 2>/dev/null) || tot=0
+                    _total_traffic=$((_total_traffic + tot))
+                done <<< "$_combined_traffic"
             fi
-            [ "$total_upload" -eq 0 ] && total_upload=1
+            [ "$_total_traffic" -eq 0 ] && _total_traffic=1
 
-            if [ -n "$top7_upload" ]; then
-                while IFS='|' read -r bytes country; do
+            printf "  ${BOLD}%-14s %4s %-12s %10s %10s${NC}${EL}\n" "Country" "Pct" "" "Upload" "Download"
+            if [ -n "$top5_traffic" ]; then
+                while IFS='|' read -r total_bytes up_bytes country; do
                     [ -z "$country" ] && continue
-                    bytes=$(printf '%.0f' "${bytes:-0}" 2>/dev/null) || bytes=0
-                    local pct=$((bytes * 100 / total_upload))
-                    local bl=$((pct / 5)); [ "$bl" -lt 1 ] && bl=1; [ "$bl" -gt 20 ] && bl=20
+                    total_bytes=$(printf '%.0f' "${total_bytes:-0}" 2>/dev/null) || total_bytes=0
+                    up_bytes=$(printf '%.0f' "${up_bytes:-0}" 2>/dev/null) || up_bytes=0
+                    local dl_bytes=$((total_bytes - up_bytes))
+                    local pct=$((total_bytes * 100 / _total_traffic))
+                    local bl=$((pct / 5)); [ "$bl" -lt 1 ] && bl=1; [ "$bl" -gt 12 ] && bl=12
                     local bf=""; for ((bi=0; bi<bl; bi++)); do bf+="█"; done
-                    printf "  %-14.14s %3d%% ${MAGENTA}%-20s${NC} %10s${EL}\n" "$country" "$pct" "$bf" "$(format_bytes $bytes)"
-                done <<< "$top7_upload"
-            fi
-            echo -e "${EL}"
-
-            echo -e "${CYAN}═══ Top 7 Countries by Download (All-Time) ═══${NC}${EL}"
-            local all_download
-            all_download=$(awk -F'|' '{if($1!="" && $2+0>0) print $2"|"$1}' "$data_file" 2>/dev/null | sort -t'|' -k1 -nr)
-            local top7_download=$(echo "$all_download" | head -7)
-            local total_download=0
-            if [ -n "$all_download" ]; then
-                while IFS='|' read -r bytes co; do
-                    bytes=$(printf '%.0f' "${bytes:-0}" 2>/dev/null) || bytes=0
-                    total_download=$((total_download + bytes))
-                done <<< "$all_download"
-            fi
-            [ "$total_download" -eq 0 ] && total_download=1
-
-            if [ -n "$top7_download" ]; then
-                while IFS='|' read -r bytes country; do
-                    [ -z "$country" ] && continue
-                    bytes=$(printf '%.0f' "${bytes:-0}" 2>/dev/null) || bytes=0
-                    local pct=$((bytes * 100 / total_download))
-                    local bl=$((pct / 5)); [ "$bl" -lt 1 ] && bl=1; [ "$bl" -gt 20 ] && bl=20
-                    local bf=""; for ((bi=0; bi<bl; bi++)); do bf+="█"; done
-                    printf "  %-14.14s %3d%% ${CYAN}%-20s${NC} %10s${EL}\n" "$country" "$pct" "$bf" "$(format_bytes $bytes)"
-                done <<< "$top7_download"
+                    printf "  %-14.14s %3d%% ${MAGENTA}%-12s${NC} %10s %10s${EL}\n" "$country" "$pct" "$bf" "$(format_bytes $up_bytes)" "$(format_bytes $dl_bytes)"
+                done <<< "$top5_traffic"
             fi
             echo -e "${EL}"
         fi
@@ -3711,6 +4104,20 @@ show_advanced_stats() {
             echo -e "  ${BOLD}Lifetime:${NC} ${GREEN}${total_ips}${NC} unique IPs from ${GREEN}${unique_countries}${NC} countries${EL}"
             echo -e "${EL}"
         fi
+
+        # Unbounded detailed stats
+        if [ "$UNBOUNDED_ENABLED" = "true" ] && echo "$_adv_running" | grep -q "^${UNBOUNDED_CONTAINER}$"; then
+            echo -e "${CYAN}═══ Unbounded Proxy (Lantern) ═══${NC}${EL}"
+            if [ -f "$_adv_tmpdir/ub_stats" ]; then
+                local _ub_detail=$(cat "$_adv_tmpdir/ub_stats")
+                local _ub_live=$(echo "$_ub_detail" | awk '{print $1}')
+                local _ub_alltime=$(echo "$_ub_detail" | awk '{print $2}')
+                echo -e "  Live connections: ${GREEN}${_ub_live:-0}${NC}  |  All-time served: ${_ub_alltime:-0}${EL}"
+            fi
+            echo -e "${EL}"
+        fi
+
+        rm -rf "$_adv_tmpdir"
 
         echo -e "${BOLD}Refreshes every 15 seconds. Press any key to return...${NC}${EL}"
 
@@ -3757,6 +4164,7 @@ show_peers() {
         echo -e "${CYAN}╚${_bar}╝${NC}${EL}"
         echo -e "${EL}"
 
+        local count=${CONTAINER_COUNT:-1}
         local snap_file="$STATS_DIR/tracker_snapshot"
 
         # If no tracker snapshot, try direct ControlPort query as fallback
@@ -3837,7 +4245,9 @@ show_peers() {
         fi
 
         # Snowflake section
-        if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+        local _peers_running
+        _peers_running=$(docker ps --format '{{.Names}}' 2>/dev/null)
+        if [ "$SNOWFLAKE_ENABLED" = "true" ] && echo "$_peers_running" | grep -q "^snowflake-proxy$"; then
             echo -e "${EL}"
             local _sf_label2="Snowflake Proxy (WebRTC)"
             [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_label2="Snowflake Proxy (WebRTC) x${SNOWFLAKE_COUNT}"
@@ -4548,6 +4958,15 @@ telegram_build_report_text() {
         fi
     fi
 
+    # Include unbounded in totals
+    if [ "${UNBOUNDED_ENABLED:-false}" = "true" ]; then
+        total_containers=$((total_containers + 1))
+        if is_unbounded_running 2>/dev/null; then
+            total_running=$((total_running + 1))
+            # Unbounded traffic not measurable (--network host), skip traffic totals
+        fi
+    fi
+
     # Uptime from earliest container
     if [ -n "$earliest_start" ] && [ "$earliest_start" -gt 0 ] 2>/dev/null; then
         local now=$(date +%s)
@@ -5117,6 +5536,17 @@ build_report() {
         total_written=$((total_written + sf_out))
     fi
 
+    # Include Unbounded in totals
+    local ub_rpt_conns=0
+    if [ "${UNBOUNDED_ENABLED:-false}" = "true" ]; then
+        total_containers=$((total_containers + 1))
+        if is_unbounded_running; then
+            total_running=$((total_running + 1))
+            local ub_rpt_s=$(get_unbounded_stats 2>/dev/null)
+            ub_rpt_conns=$(echo "$ub_rpt_s" | awk '{print $2}')
+        fi
+    fi
+
     if [ -n "$earliest_start" ] && [ "$earliest_start" -gt 0 ] 2>/dev/null; then
         local now=$(date +%s) up=$(($(date +%s) - earliest_start))
         local days=$((up / 86400)) hours=$(( (up % 86400) / 3600 )) mins=$(( (up % 3600) / 60 ))
@@ -5139,6 +5569,12 @@ build_report() {
     if [ "${SNOWFLAKE_ENABLED:-false}" = "true" ] && [ "$sf_conns" -gt 0 ] 2>/dev/null; then
         local sf_total=$((sf_in + sf_out))
         report+="❄ Snowflake: ${sf_conns} conns | $(format_bytes $sf_total) transferred"
+        report+=$'\n'
+    fi
+
+    # Unbounded detail line
+    if [ "${UNBOUNDED_ENABLED:-false}" = "true" ] && [ "${ub_rpt_conns:-0}" -gt 0 ] 2>/dev/null; then
+        report+="🌐 Unbounded: ${ub_rpt_conns} connections served"
         report+=$'\n'
     fi
 
@@ -5359,6 +5795,35 @@ except Exception:
                     telegram_send "$sf_msg"
                 fi
                 ;;
+            /tor_unbounded|/tor_unbounded@*)
+                if [ "${UNBOUNDED_ENABLED:-false}" != "true" ]; then
+                    telegram_send "🌐 Unbounded proxy is not enabled."
+                elif ! is_unbounded_running; then
+                    telegram_send "🌐 *Unbounded Proxy (Lantern)*
+🔴 Status: Stopped"
+                else
+                    local _ub_agg=$(get_unbounded_stats 2>/dev/null)
+                    local ub_live_conns=$(echo "$_ub_agg" | awk '{print $1}')
+                    local ub_total_conns=$(echo "$_ub_agg" | awk '{print $2}')
+                    ub_live_conns=${ub_live_conns:-0}; ub_total_conns=${ub_total_conns:-0}
+                    local ub_started=$(docker inspect --format='{{.State.StartedAt}}' "$UNBOUNDED_CONTAINER" 2>/dev/null | cut -d'.' -f1)
+                    local ub_uptime="unknown"
+                    if [ -n "$ub_started" ]; then
+                        local ub_se=$(date -d "$ub_started" +%s 2>/dev/null || echo 0)
+                        if [ "$ub_se" -gt 0 ] 2>/dev/null; then
+                            local ub_diff=$(( $(date +%s) - ub_se ))
+                            local ub_d=$((ub_diff / 86400)) ub_h=$(( (ub_diff % 86400) / 3600 )) ub_m=$(( (ub_diff % 3600) / 60 ))
+                            [ "$ub_d" -gt 0 ] && ub_uptime="${ub_d}d ${ub_h}h ${ub_m}m" || ub_uptime="${ub_h}h ${ub_m}m"
+                        fi
+                    fi
+                    local ub_msg="🌐 *Unbounded Proxy (Lantern)*
+🟢 Status: Running
+⏱ Uptime: ${ub_uptime}
+👥 Live connections: ${ub_live_conns}
+📊 All-time connections: ${ub_total_conns}"
+                    telegram_send "$ub_msg"
+                fi
+                ;;
             /tor_help|/tor_help@*)
                 telegram_send "📖 *Available Commands*
 /tor\_status — Full status report
@@ -5366,6 +5831,7 @@ except Exception:
 /tor\_uptime — Per-container uptime + 24h availability
 /tor\_containers — Per-container status
 /tor\_snowflake — Snowflake proxy details
+/tor\_unbounded — Unbounded (Lantern) proxy details
 /tor\_restart\_N — Restart container N
 /tor\_stop\_N — Stop container N
 /tor\_start\_N — Start container N
@@ -5758,7 +6224,7 @@ uninstall() {
     echo -e "${RED}╠═══════════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${RED}║                                                                   ║${NC}"
     echo -e "${RED}║  This will remove:                                                ║${NC}"
-    echo -e "${RED}║  • All Tor relay containers (and Snowflake proxy)                  ║${NC}"
+    echo -e "${RED}║  • All Tor relay containers (Snowflake & Unbounded proxies)        ║${NC}"
     echo -e "${RED}║  • All Docker volumes (relay data & keys)                         ║${NC}"
     echo -e "${RED}║  • Systemd/OpenRC services                                        ║${NC}"
     echo -e "${RED}║  • Configuration files in /opt/torware                           ║${NC}"
@@ -5834,10 +6300,16 @@ uninstall() {
         docker volume rm "$_sfv" 2>/dev/null || true
     done
 
+    # Stop and remove Unbounded
+    docker stop --timeout 10 "$UNBOUNDED_CONTAINER" 2>/dev/null || true
+    docker rm -f "$UNBOUNDED_CONTAINER" 2>/dev/null || true
+    docker volume rm "$UNBOUNDED_VOLUME" 2>/dev/null || true
+
     # Remove images
     docker rmi "$BRIDGE_IMAGE" 2>/dev/null || true
     docker rmi "$RELAY_IMAGE" 2>/dev/null || true
     docker rmi "$SNOWFLAKE_IMAGE" 2>/dev/null || true
+    docker rmi "$UNBOUNDED_IMAGE" 2>/dev/null || true
 
     # Remove files
     if [ "$keep_backups" = "true" ]; then
@@ -5883,6 +6355,12 @@ show_logs() {
             _opt=$((_opt + 1))
         done
     fi
+    local _ub_opt=""
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+        _ub_opt=$_opt
+        echo -e "    ${GREEN}${_opt}.${NC} ${UNBOUNDED_CONTAINER} (Lantern proxy)"
+        _opt=$((_opt + 1))
+    fi
     echo -e "    ${GREEN}0.${NC} ← Back"
     echo ""
     read -p "  choice: " choice < /dev/tty || return
@@ -5892,7 +6370,9 @@ show_logs() {
     local cname=""
     local _sf_start=$((count + 1))
     local _sf_end=$((count + ${SNOWFLAKE_COUNT:-1}))
-    if [ "$SNOWFLAKE_ENABLED" = "true" ] && [ "$choice" -ge "$_sf_start" ] 2>/dev/null && [ "$choice" -le "$_sf_end" ] 2>/dev/null; then
+    if [ -n "$_ub_opt" ] && [ "$choice" = "$_ub_opt" ] 2>/dev/null; then
+        cname="$UNBOUNDED_CONTAINER"
+    elif [ "$SNOWFLAKE_ENABLED" = "true" ] && [ "$choice" -ge "$_sf_start" ] 2>/dev/null && [ "$choice" -le "$_sf_end" ] 2>/dev/null; then
         local _sf_idx=$((choice - count))
         cname=$(get_snowflake_name $_sf_idx)
     elif [[ "$choice" =~ ^[1-9]$ ]] && [ "$choice" -le "$count" ]; then
@@ -5950,6 +6430,7 @@ show_help() {
     echo -e "    ${GREEN}backup${NC}        Backup relay identity keys"
     echo -e "    ${GREEN}restore${NC}       Restore relay keys from backup"
     echo -e "    ${GREEN}snowflake${NC}     Toggle/manage Snowflake proxy"
+    echo -e "    ${GREEN}unbounded${NC}     Toggle/manage Unbounded (Lantern) proxy"
     echo -e "    ${GREEN}version${NC}       Show version info"
     echo -e "    ${GREEN}uninstall${NC}     Remove Torware"
     echo ""
@@ -5973,13 +6454,14 @@ show_about() {
         echo -e "    ${GREEN}3.${NC} 🔁 Middle Relays"
         echo -e "    ${GREEN}4.${NC} 🚪 Exit Relays"
         echo -e "    ${GREEN}5.${NC} ❄  Snowflake Proxy"
-        echo -e "    ${GREEN}6.${NC} 🔒 How Tor Circuits Work"
-        echo -e "    ${GREEN}7.${NC} 📊 Understanding Your Dashboard"
-        echo -e "    ${GREEN}8.${NC} ⚖  Legal & Safety Considerations"
-        echo -e "    ${GREEN}9.${NC} 📖 About Torware"
+        echo -e "    ${GREEN}6.${NC} 🌐 Lantern Unbounded Proxy"
+        echo -e "    ${GREEN}7.${NC} 🔒 How Tor Circuits Work"
+        echo -e "    ${GREEN}8.${NC} 📊 Understanding Your Dashboard"
+        echo -e "    ${GREEN}9.${NC} ⚖  Legal & Safety Considerations"
+        echo -e "   ${GREEN}10.${NC} 📖 About Torware"
         echo -e "    ${GREEN}0.${NC} ← Back"
         echo ""
-        read -p "  Choose a topic: " _topic < /dev/tty || { _back=true; continue; }
+        read -p "  Choose a topic [0-10]: " _topic < /dev/tty || { _back=true; continue; }
 
         echo ""
         case "$_topic" in
@@ -6137,6 +6619,36 @@ show_about() {
                 echo -e "  Can run safely alongside any relay type."
                 ;;
             6)
+                echo -e "${CYAN}═══ Lantern Unbounded Proxy ═══${NC}"
+                echo ""
+                echo -e "  Lantern is a free, open-source censorship circumvention tool"
+                echo -e "  that helps users in restricted countries access the open internet."
+                echo -e "  ${BOLD}Unbounded${NC} is Lantern's volunteer proxy network — similar in spirit"
+                echo -e "  to Snowflake, but for the Lantern network instead of Tor."
+                echo ""
+                echo -e "  ${BOLD}How Unbounded works:${NC}"
+                echo -e "  1. You run a lightweight ${CYAN}widget${NC} process (Go binary)"
+                echo -e "  2. The widget registers with Lantern's ${CYAN}FREDDIE${NC} signaling server"
+                echo -e "  3. Censored users connect to you via ${CYAN}WebRTC${NC} (peer-to-peer)"
+                echo -e "  4. Your proxy forwards their traffic to Lantern's ${CYAN}EGRESS${NC} server"
+                echo -e "  5. The egress server delivers the traffic to its destination"
+                echo ""
+                echo -e "  ${BOLD}You are NOT an exit point.${NC} All traffic exits through Lantern's"
+                echo -e "  egress servers — your IP is never exposed as the source. The"
+                echo -e "  traffic between you and the egress server is encrypted."
+                echo ""
+                echo -e "  ${BOLD}Key differences from Snowflake:${NC}"
+                echo -e "  • Snowflake serves the ${CYAN}Tor${NC} network; Unbounded serves ${CYAN}Lantern${NC}"
+                echo -e "  • Unbounded multiplexes many users on a single instance"
+                echo -e "  • Uses ${GREEN}--network host${NC} for WebRTC NAT traversal (no port forwarding)"
+                echo -e "  • Built from source (Go) — Docker image is compiled on first run"
+                echo ""
+                echo -e "  ${BOLD}Resource usage:${NC} Very lightweight (0.5 CPU, 256MB RAM)."
+                echo -e "  Can run safely alongside any relay type and Snowflake."
+                echo ""
+                echo -e "  ${BOLD}Learn more:${NC} ${CYAN}https://unbounded.lantern.io${NC}"
+                ;;
+            7)
                 echo -e "${CYAN}═══ How Tor Circuits Work ═══${NC}"
                 echo ""
                 echo -e "  A Tor circuit is a path through 3 relays:"
@@ -6164,7 +6676,7 @@ show_about() {
                 echo ""
                 echo -e "  Circuits are rebuilt every ~10 minutes for extra security."
                 ;;
-            7)
+            8)
                 echo -e "${CYAN}═══ Understanding Your Dashboard ═══${NC}"
                 echo ""
                 echo -e "  ${BOLD}Circuits:${NC}"
@@ -6216,7 +6728,7 @@ show_about() {
                 echo -e "  • After 24 hours: steady circuits, growing country list"
                 echo -e "  • After days/weeks: stable traffic as BridgeDB distributes you"
                 ;;
-            8)
+            9)
                 echo -e "${CYAN}═══ Legal & Safety Considerations ═══${NC}"
                 echo ""
                 echo -e "  ${BOLD}Bridges (safest):${NC}"
@@ -6242,13 +6754,18 @@ show_about() {
                 echo -e "  • Traffic is encrypted end-to-end."
                 echo -e "  • Very low legal risk."
                 echo ""
+                echo -e "  ${BOLD}Unbounded / Lantern (very safe):${NC}"
+                echo -e "  • You relay encrypted traffic to Lantern's egress servers."
+                echo -e "  • Your IP is never the exit point — Lantern handles that."
+                echo -e "  • Very low legal risk, similar to Snowflake."
+                echo ""
                 echo -e "  ${BOLD}General tips:${NC}"
                 echo -e "  • Run on a VPS/dedicated server rather than home if possible"
                 echo -e "  • Use a separate IP from your personal services"
                 echo -e "  • Set a contact email so Tor directory authorities can reach you"
                 echo -e "  • Keep your relay updated (Torware handles Docker image updates)"
                 ;;
-            9)
+            10)
                 echo -e "${CYAN}═══ About Torware ═══${NC}"
                 echo ""
                 echo -e "  ${BOLD}Torware v${VERSION}${NC}"
@@ -6259,6 +6776,7 @@ show_about() {
                 echo -e "  • Multi-container — Run up to 5 relays on one host"
                 echo -e "  • Mixed types — Different relay types per container"
                 echo -e "  • Snowflake — Run a WebRTC proxy alongside your relay"
+                echo -e "  • Unbounded — Help Lantern network with WebRTC proxy"
                 echo -e "  • Live dashboard — Real-time stats from Tor's ControlPort"
                 echo -e "  • Country tracking — See where your traffic goes"
                 echo -e "  • Telegram alerts — Get notified about your relay"
@@ -6332,6 +6850,14 @@ show_menu() {
         else
             echo -e "    ${GREEN}s.${NC} ❄  Enable Snowflake Proxy"
         fi
+        # Show Unbounded status
+        if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+            local _ub_label="${GREEN}Running${NC}"
+            is_unbounded_running || _ub_label="${RED}Stopped${NC}"
+            echo -e "    ${GREEN}u.${NC} 🌐 Unbounded Proxy (Lantern) [${_ub_label}]"
+        else
+            echo -e "    ${GREEN}u.${NC} 🌐 Enable Unbounded Proxy (Lantern)"
+        fi
         echo -e "    ${GREEN}t.${NC} 💬 Telegram Notifications"
         echo -e "    ${GREEN}a.${NC} 📖 About & Learn"
         echo -e "    ${GREEN}0.${NC} 🚪 Exit"
@@ -6358,12 +6884,16 @@ show_menu() {
                 if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
                     start_snowflake_container
                 fi
+                if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+                    start_unbounded_container
+                fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
             6)
                 stop_relay
                 if [ "$RELAY_TYPE" = "none" ]; then
                     stop_snowflake_container
+                    stop_unbounded_container
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
@@ -6371,6 +6901,9 @@ show_menu() {
                 restart_relay
                 if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
                     restart_snowflake_container
+                fi
+                if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+                    restart_unbounded_container
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
@@ -6539,6 +7072,103 @@ show_menu() {
                         [[ "$_sf_mem" =~ ^[0-9]+[mMgG]$ ]] && SNOWFLAKE_MEMORY_1="$(echo "$_sf_mem" | tr '[:upper:]' '[:lower:]')" || SNOWFLAKE_MEMORY_1="$_def_mem"
                         save_settings
                         run_snowflake_container 1
+                    fi
+                fi
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                ;;
+            u|U)
+                if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+                    echo ""
+                    echo -e "  Unbounded (Lantern) is currently ${GREEN}enabled${NC}."
+                    local _ubn="$UNBOUNDED_CONTAINER"
+                    local _ubs="${RED}Stopped${NC}"
+                    is_unbounded_running && _ubs="${GREEN}Running${NC}"
+                    echo -e "    ${_ubn}: [${_ubs}]  CPU: ${CYAN}${UNBOUNDED_CPUS:-0.5}${NC}  RAM: ${CYAN}${UNBOUNDED_MEMORY:-256m}${NC}"
+                    echo ""
+                    echo -e "    1. Restart Unbounded proxy"
+                    echo -e "    2. Stop Unbounded proxy"
+                    echo -e "    3. Disable Unbounded"
+                    echo -e "    4. Change resource limits"
+                    echo -e "    ${RED}5. Remove Unbounded (stop, remove container & image)${NC}"
+                    echo -e "    0. Back"
+                    read -p "  choice: " ub_choice < /dev/tty || true
+                    case "${ub_choice:-0}" in
+                        1) restart_unbounded_container ;;
+                        2)
+                            stop_unbounded_container
+                            log_warn "Unbounded stopped but still enabled. It will restart on next 'torware start'. Use option 3 to disable permanently."
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            echo ""
+                            ;;
+                        3)
+                            UNBOUNDED_ENABLED="false"
+                            stop_unbounded_container
+                            save_settings
+                            log_success "Unbounded disabled"
+                            ;;
+                        5)
+                            echo ""
+                            read -p "  Are you sure? This will remove the container, volume, and image. [y/N] " _ub_rm < /dev/tty || true
+                            if [[ "$_ub_rm" =~ ^[Yy]$ ]]; then
+                                UNBOUNDED_ENABLED="false"
+                                stop_unbounded_container
+                                docker rm -f "$UNBOUNDED_CONTAINER" 2>/dev/null || true
+                                docker volume rm "$UNBOUNDED_VOLUME" 2>/dev/null || true
+                                docker rmi "$UNBOUNDED_IMAGE" 2>/dev/null || true
+                                save_settings
+                                log_success "Unbounded proxy fully removed"
+                            else
+                                log_info "Cancelled"
+                            fi
+                            ;;
+                        4)
+                            echo ""
+                            echo -e "  ${DIM}CPU: number of cores (e.g. 0.25, 0.5, 1.0)${NC}"
+                            echo -e "  ${DIM}RAM: amount with unit (e.g. 128m, 256m, 512m)${NC}"
+                            echo ""
+                            read -p "    CPU cores [${UNBOUNDED_CPUS:-0.5}]: " _ub_cpu < /dev/tty || true
+                            read -p "    RAM limit [${UNBOUNDED_MEMORY:-256m}]: " _ub_mem < /dev/tty || true
+                            if [ -n "$_ub_cpu" ]; then
+                                if [[ "$_ub_cpu" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                                    UNBOUNDED_CPUS="$_ub_cpu"
+                                else
+                                    log_warn "Invalid CPU value, keeping ${UNBOUNDED_CPUS:-0.5}"
+                                fi
+                            fi
+                            if [ -n "$_ub_mem" ]; then
+                                if [[ "$_ub_mem" =~ ^[0-9]+[mMgG]$ ]]; then
+                                    UNBOUNDED_MEMORY="$(echo "$_ub_mem" | tr '[:upper:]' '[:lower:]')"
+                                else
+                                    log_warn "Invalid RAM value, keeping ${UNBOUNDED_MEMORY:-256m}"
+                                fi
+                            fi
+                            save_settings
+                            log_success "Unbounded limits updated"
+                            echo ""
+                            read -p "  Restart Unbounded to apply? [Y/n] " _ub_rs < /dev/tty || true
+                            if [[ ! "$_ub_rs" =~ ^[Nn]$ ]]; then
+                                restart_unbounded_container
+                            fi
+                            ;;
+                    esac
+                else
+                    echo ""
+                    echo -e "  Unbounded is a WebRTC proxy that helps censored users"
+                    echo -e "  connect via the Lantern network. Runs as a lightweight container."
+                    read -p "  Enable Unbounded proxy? [y/N] " ub_en < /dev/tty || true
+                    if [[ "$ub_en" =~ ^[Yy]$ ]]; then
+                        UNBOUNDED_ENABLED="true"
+                        local _def_cpu=$(get_unbounded_default_cpus)
+                        local _def_mem=$(get_unbounded_default_memory)
+                        echo ""
+                        read -p "  CPU cores [${_def_cpu}]: " _ub_cpu < /dev/tty || true
+                        read -p "  RAM limit [${_def_mem}]: " _ub_mem < /dev/tty || true
+                        [ -z "$_ub_cpu" ] && _ub_cpu="$_def_cpu"
+                        [ -z "$_ub_mem" ] && _ub_mem="$_def_mem"
+                        [[ "$_ub_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] && UNBOUNDED_CPUS="$_ub_cpu" || UNBOUNDED_CPUS="$_def_cpu"
+                        [[ "$_ub_mem" =~ ^[0-9]+[mMgG]$ ]] && UNBOUNDED_MEMORY="$(echo "$_ub_mem" | tr '[:upper:]' '[:lower:]')" || UNBOUNDED_MEMORY="$_def_mem"
+                        save_settings
+                        run_unbounded_container
                     fi
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
@@ -7000,6 +7630,9 @@ print_summary() {
     if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
     echo -e "${GREEN}║    torware snowflake    - Snowflake proxy status                 ║${NC}"
     fi
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+    echo -e "${GREEN}║    torware unbounded    - Unbounded (Lantern) proxy status       ║${NC}"
+    fi
     echo -e "${GREEN}║    torware logs         - Stream container logs                  ║${NC}"
     echo -e "${GREEN}║    torware --help       - Full command reference                 ║${NC}"
     echo -e "${GREEN}║                                                                   ║${NC}"
@@ -7025,6 +7658,9 @@ print_summary() {
     if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
         echo -e "    Snowflake: Uses ephemeral UDP ports (${GREEN}${SNOWFLAKE_PORT_RANGE}${NC}) — typically auto-traversed via WebRTC"
     fi
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+        echo -e "    Unbounded: Uses ${GREEN}--network host${NC} — no port forwarding needed (WebRTC auto-traversal)"
+    fi
     echo ""
 }
 
@@ -7039,14 +7675,19 @@ cli_main() {
         start)
             start_relay
             [ "$SNOWFLAKE_ENABLED" = "true" ] && start_snowflake_container
+            [ "$UNBOUNDED_ENABLED" = "true" ] && start_unbounded_container
             ;;
         stop)
             stop_relay
-            [ "$RELAY_TYPE" = "none" ] && stop_snowflake_container
+            if [ "$RELAY_TYPE" = "none" ]; then
+                stop_snowflake_container
+                stop_unbounded_container
+            fi
             ;;
         restart)
             restart_relay
             [ "$SNOWFLAKE_ENABLED" = "true" ] && restart_snowflake_container
+            [ "$UNBOUNDED_ENABLED" = "true" ] && restart_unbounded_container
             ;;
         status)
             show_status
@@ -7096,6 +7737,22 @@ cli_main() {
             else
                 echo -e "  Snowflake proxy: ${DIM}disabled${NC}"
                 echo -e "  Enable via 'torware menu' > Snowflake option"
+            fi
+            ;;
+        unbounded)
+            if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+                echo -e "  Unbounded proxy (Lantern): ${GREEN}enabled${NC}"
+                if is_unbounded_running; then
+                    echo -e "  Status: ${GREEN}running${NC}"
+                    local ub_s=$(get_unbounded_stats 2>/dev/null)
+                    echo -e "  Live connections: $(echo "$ub_s" | awk '{print $1}')  |  All-time: $(echo "$ub_s" | awk '{print $2}')"
+                else
+                    echo -e "  Status: ${RED}stopped${NC}"
+                    echo -e "  Run 'torware start' to start all containers"
+                fi
+            else
+                echo -e "  Unbounded proxy (Lantern): ${DIM}disabled${NC}"
+                echo -e "  Enable via 'torware menu' > Unbounded option"
             fi
             ;;
         version|--version|-v)
