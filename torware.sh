@@ -1,18 +1,18 @@
 #!/bin/bash
 #
-# ╔═════════════════════════════════════════════════════════╗
-# ║      🧅 TORWARE v1.0                                    ║
-# ║                                                         ║
+# ╔═════════════════════════════════════════════════════════ ╗
+# ║      🧅 TORWARE v1.1                                     ║
+# ║                                                          ║
 # ║  One-click setup for Tor Bridge/Relay nodes              ║
-# ║                                                         ║
+# ║                                                          ║
 # ║  • Installs Docker (if needed)                           ║
 # ║  • Runs Tor Bridge/Relay in Docker with live stats       ║
 # ║  • Snowflake WebRTC proxy support                        ║
-# ║  • Auto-start on boot via systemd/OpenRC/SysVinit       ║
+# ║  • Auto-start on boot via systemd/OpenRC/SysVinit        ║
 # ║  • Easy management via CLI or interactive menu           ║
-# ║                                                         ║
+# ║                                                          ║
 # ║  Tor Project: https://www.torproject.org/                ║
-# ╚═════════════════════════════════════════════════════════╝
+# ╚═════════════════════════════════════════════════════════ ╝
 #
 # Usage:
 # curl -sL https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh | sudo bash
@@ -28,13 +28,13 @@ set -eo pipefail
 # Ensure consistent numeric formatting across locales
 export LC_NUMERIC=C
 
-# Require bash 4+ (for associative arrays)
+# Require bash 4.2+ (for associative arrays and declare -g)
 if [ -z "$BASH_VERSION" ]; then
     echo "Error: This script requires bash. Please run with: bash $0"
     exit 1
 fi
-if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
-    echo "Error: This script requires bash 4+ (found $BASH_VERSION). Please upgrade bash."
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || { [ "${BASH_VERSINFO[0]:-0}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 2 ]; }; then
+    echo "Error: This script requires bash 4.2+ (found $BASH_VERSION). Please upgrade bash."
     exit 1
 fi
 
@@ -53,10 +53,10 @@ _cleanup_tmp() {
 trap '_cleanup_tmp' EXIT
 
 VERSION="1.1"
-# Docker image tags — using :latest for auto-updates. Pin to a specific tag for reproducibility.
-BRIDGE_IMAGE="thetorproject/obfs4-bridge:latest"
-RELAY_IMAGE="osminogin/tor-simple:latest"
-SNOWFLAKE_IMAGE="thetorproject/snowflake-proxy:latest"
+# Docker image tags — pinned to specific versions for reproducibility. Use :latest for auto-updates.
+BRIDGE_IMAGE="thetorproject/obfs4-bridge:0.24"
+RELAY_IMAGE="osminogin/tor-simple:0.4.8.10"
+SNOWFLAKE_IMAGE="thetorproject/snowflake-proxy:0.20"
 INSTALL_DIR="${INSTALL_DIR:-/opt/torware}"
 
 # Validate INSTALL_DIR is absolute
@@ -106,6 +106,113 @@ UNBOUNDED_FREDDIE="https://bf-freddie.herokuapp.com"
 UNBOUNDED_EGRESS="wss://unbounded.iantem.io"
 UNBOUNDED_TAG=""
 
+# MTProxy (Telegram) settings
+MTPROXY_ENABLED="false"
+MTPROXY_CONTAINER="mtproxy"
+MTPROXY_IMAGE="nineseconds/mtg:2.1.7"
+MTPROXY_PORT=8443
+MTPROXY_METRICS_PORT=3129
+MTPROXY_DOMAIN="cloudflare.com"
+MTPROXY_SECRET=""
+MTPROXY_CPUS="0.5"
+MTPROXY_MEMORY="128m"
+MTPROXY_CONCURRENCY=8192
+MTPROXY_BLOCKLIST_COUNTRIES=""
+
+#═══════════════════════════════════════════════════════════════════════
+# Centralized Configuration
+#═══════════════════════════════════════════════════════════════════════
+declare -gA CONFIG=(
+    # Relay Configuration
+    [relay_type]="bridge"
+    [relay_nickname]=""
+    [relay_contact]=""
+    [relay_bandwidth]=5
+    [relay_container_count]=1
+    [relay_orport_base]=9001
+    [relay_controlport_base]=9051
+    [relay_ptport_base]=9100
+    [relay_data_cap_gb]=0
+    [relay_exit_policy]="reduced"
+
+    # Snowflake Proxy
+    [snowflake_enabled]="false"
+    [snowflake_count]=1
+    [snowflake_cpus]="1.5"
+    [snowflake_memory]="512m"
+
+    # Unbounded Proxy
+    [unbounded_enabled]="false"
+    [unbounded_cpus]="0.5"
+    [unbounded_memory]="256m"
+
+    # MTProxy (Telegram)
+    [mtproxy_enabled]="false"
+    [mtproxy_port]=8443
+    [mtproxy_domain]="cloudflare.com"
+    [mtproxy_secret]=""
+    [mtproxy_concurrency]=8192
+
+    # Telegram Integration
+    [telegram_enabled]="false"
+    [telegram_bot_token]=""
+    [telegram_chat_id]=""
+    [telegram_interval]=6
+)
+
+config_get() {
+    local key="$1"
+    echo "${CONFIG[$key]:-}"
+}
+
+config_set() {
+    local key="$1"
+    local val="$2"
+    CONFIG[$key]="$val"
+}
+
+config_sync_from_globals() {
+    CONFIG[relay_type]="${RELAY_TYPE:-bridge}"
+    CONFIG[relay_nickname]="${NICKNAME:-}"
+    CONFIG[relay_contact]="${CONTACT_INFO:-}"
+    CONFIG[relay_bandwidth]="${BANDWIDTH:-5}"
+    CONFIG[relay_container_count]="${CONTAINER_COUNT:-1}"
+    CONFIG[relay_orport_base]="${ORPORT_BASE:-9001}"
+    CONFIG[relay_controlport_base]="${CONTROLPORT_BASE:-9051}"
+    CONFIG[relay_ptport_base]="${PT_PORT_BASE:-9100}"
+    CONFIG[relay_data_cap_gb]="${DATA_CAP_GB:-0}"
+    CONFIG[snowflake_enabled]="${SNOWFLAKE_ENABLED:-false}"
+    CONFIG[snowflake_count]="${SNOWFLAKE_COUNT:-1}"
+    CONFIG[unbounded_enabled]="${UNBOUNDED_ENABLED:-false}"
+    CONFIG[mtproxy_enabled]="${MTPROXY_ENABLED:-false}"
+    CONFIG[mtproxy_port]="${MTPROXY_PORT:-8443}"
+    CONFIG[mtproxy_domain]="${MTPROXY_DOMAIN:-cloudflare.com}"
+    CONFIG[telegram_enabled]="${TELEGRAM_ENABLED:-false}"
+    CONFIG[telegram_bot_token]="${TELEGRAM_BOT_TOKEN:-}"
+    CONFIG[telegram_chat_id]="${TELEGRAM_CHAT_ID:-}"
+}
+
+config_sync_to_globals() {
+    RELAY_TYPE="${CONFIG[relay_type]}"
+    NICKNAME="${CONFIG[relay_nickname]}"
+    CONTACT_INFO="${CONFIG[relay_contact]}"
+    BANDWIDTH="${CONFIG[relay_bandwidth]}"
+    CONTAINER_COUNT="${CONFIG[relay_container_count]}"
+    ORPORT_BASE="${CONFIG[relay_orport_base]}"
+    CONTROLPORT_BASE="${CONFIG[relay_controlport_base]}"
+    PT_PORT_BASE="${CONFIG[relay_ptport_base]}"
+    DATA_CAP_GB="${CONFIG[relay_data_cap_gb]}"
+    SNOWFLAKE_ENABLED="${CONFIG[snowflake_enabled]}"
+    SNOWFLAKE_COUNT="${CONFIG[snowflake_count]}"
+    UNBOUNDED_ENABLED="${CONFIG[unbounded_enabled]}"
+    MTPROXY_ENABLED="${CONFIG[mtproxy_enabled]}"
+    MTPROXY_PORT="${CONFIG[mtproxy_port]}"
+    MTPROXY_DOMAIN="${CONFIG[mtproxy_domain]}"
+    TELEGRAM_ENABLED="${CONFIG[telegram_enabled]}"
+    TELEGRAM_BOT_TOKEN="${CONFIG[telegram_bot_token]}"
+    TELEGRAM_CHAT_ID="${CONFIG[telegram_chat_id]}"
+}
+
 # Colors — disable when stdout is not a terminal
 if [ -t 1 ]; then
     RED='\033[0;31m'
@@ -125,6 +232,33 @@ fi
 # Utility Functions
 #═══════════════════════════════════════════════════════════════════════
 
+# Structured logging support
+LOG_FORMAT="${LOG_FORMAT:-text}"  # text or json
+LOG_FILE="${LOG_FILE:-}"          # Optional file output
+
+log_json() {
+    local level="$1" msg="$2"
+    local ts
+    ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    # Escape special JSON characters in message
+    msg="${msg//\\/\\\\}"
+    msg="${msg//\"/\\\"}"
+    msg="${msg//$'\n'/\\n}"
+    msg="${msg//$'\r'/\\r}"
+    msg="${msg//$'\t'/\\t}"
+    local json="{\"timestamp\":\"$ts\",\"level\":\"$level\",\"message\":\"$msg\"}"
+
+    if [ -n "$LOG_FILE" ]; then
+        echo "$json" >> "$LOG_FILE"
+    fi
+
+    if [ "$LOG_FORMAT" = "json" ]; then
+        echo "$json"
+        return 0
+    fi
+    return 1
+}
+
 print_header() {
     local W=57
     local bar="═════════════════════════════════════════════════════════"
@@ -140,19 +274,19 @@ print_header() {
 }
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    log_json "INFO" "$1" || echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 log_success() {
-    echo -e "${GREEN}[✓]${NC} $1"
+    log_json "SUCCESS" "$1" || echo -e "${GREEN}[✓]${NC} $1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[!]${NC} $1"
+    log_json "WARN" "$1" || echo -e "${YELLOW}[!]${NC} $1" >&2
 }
 
 log_error() {
-    echo -e "${RED}[✗]${NC} $1"
+    log_json "ERROR" "$1" || echo -e "${RED}[✗]${NC} $1" >&2
 }
 
 check_root() {
@@ -541,6 +675,21 @@ get_cpu_cores() {
         echo 1
     else
         echo "$cores"
+    fi
+}
+
+get_public_ip() {
+    # Try multiple services to get public IP
+    local ip=""
+    ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null) ||
+    ip=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null) ||
+    ip=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null) ||
+    ip=""
+    # Validate it looks like an IP (basic check)
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$ip" =~ : ]]; then
+        echo "$ip"
+    else
+        echo ""
     fi
 }
 
@@ -1049,11 +1198,13 @@ get_control_cookie() {
     local vol=$(get_volume_name $idx)
     local cache_file="${TMPDIR:-/tmp}/.tor_cookie_cache_${idx}"
 
-    # Symlink protection
-    [ -L "$cache_file" ] && rm -f "$cache_file"
+    # Symlink protection - refuse to use if symlink
+    if [ -L "$cache_file" ]; then
+        rm -f "$cache_file" 2>/dev/null
+    fi
 
-    # Use cache if fresh (avoid spawning Docker container every call)
-    if [ -f "$cache_file" ]; then
+    # Use cache if fresh and regular file (avoid spawning Docker container every call)
+    if [ -f "$cache_file" ] && [ ! -L "$cache_file" ]; then
         local mtime
         mtime=$(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)
         local age=$(( $(date +%s) - mtime ))
@@ -1068,7 +1219,10 @@ get_control_cookie() {
         sh -c 'od -A n -t x1 /data/control_auth_cookie 2>/dev/null | tr -d " \n"' 2>/dev/null)
 
     if [ -n "$cookie" ]; then
-        ( umask 077; echo "$cookie" > "$cache_file" )
+        # Write to temp file then atomically move to prevent TOCTOU race
+        local tmp_cache
+        tmp_cache=$(mktemp "${TMPDIR:-/tmp}/.tor_cookie_cache_${idx}.XXXXXX" 2>/dev/null) || return
+        ( umask 077; echo "$cookie" > "$tmp_cache" ) && mv -f "$tmp_cache" "$cache_file" 2>/dev/null
     fi
     echo "$cookie"
 }
@@ -1158,8 +1312,13 @@ get_tor_accounting() {
 get_tor_fingerprint() {
     local idx=$1
     local cache_file="${TMPDIR:-/tmp}/.tor_fp_cache_${idx}"
-    [ -L "$cache_file" ] && rm -f "$cache_file"
-    if [ -f "$cache_file" ]; then
+
+    # Symlink protection - refuse to use if symlink
+    if [ -L "$cache_file" ]; then
+        rm -f "$cache_file" 2>/dev/null
+    fi
+
+    if [ -f "$cache_file" ] && [ ! -L "$cache_file" ]; then
         local mtime
         mtime=$(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)
         local age=$(( $(date +%s) - mtime ))
@@ -1173,7 +1332,10 @@ get_tor_fingerprint() {
     fp=$(docker run --rm -v "${vol}:/data:ro" alpine \
         cat /data/fingerprint 2>/dev/null | awk '{print $2}')
     if [ -n "$fp" ]; then
-        ( umask 077; echo "$fp" > "$cache_file" )
+        # Write to temp file then atomically move to prevent TOCTOU race
+        local tmp_cache
+        tmp_cache=$(mktemp "${TMPDIR:-/tmp}/.tor_fp_cache_${idx}.XXXXXX" 2>/dev/null) || return
+        ( umask 077; echo "$fp" > "$tmp_cache" ) && mv -f "$tmp_cache" "$cache_file" 2>/dev/null
     fi
     echo "$fp"
 }
@@ -1264,7 +1426,7 @@ prompt_relay_settings() {
     # ── Suggested Setup Modes ──
     echo -e "  ${BOLD}Choose a Setup Mode:${NC}"
     echo ""
-    echo -e "  ${DIM}Options 1-4 include the option to run Snowflake and/or Lantern alongside your relay.${NC}"
+    echo -e "  ${DIM}Options 1-4: You can add Snowflake, Lantern, or Telegram proxy later from the menu.${NC}"
     echo ""
     echo -e "  ${GREEN}${BOLD}  1. Single Bridge${NC} (${BOLD}RECOMMENDED${NC})"
     echo -e "       1 obfs4 bridge container — ideal for most users"
@@ -1298,11 +1460,16 @@ prompt_relay_settings() {
     echo -e "       Helps censored users connect via Lantern network"
     echo -e "       Lightweight, no IP exposure, zero config"
     echo ""
+    echo -e "  ${CYAN}  7. Telegram Proxy Only (MTProxy)${NC}"
+    echo -e "       No Tor relay — just run MTProxy for Telegram"
+    echo -e "       Helps censored users access Telegram"
+    echo -e "       FakeTLS disguises traffic as HTTPS, share link/QR"
+    echo ""
     echo -e "  ${DIM}  0. Exit${NC}"
     echo ""
 
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
-    echo -e "  Choose setup mode [0-6] (default: 1)"
+    echo -e "  Choose setup mode [0-7] (default: 1)"
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
     read -p "  mode: " input_mode < /dev/tty || true
 
@@ -1460,6 +1627,48 @@ prompt_relay_settings() {
             UNBOUNDED_CPUS="$_ub_cpu"
             UNBOUNDED_MEMORY="$_ub_mem"
             echo -e "  Unbounded: ${GREEN}Enabled${NC} (CPU: ${_ub_cpu}, RAM: ${_ub_mem})"
+            ;;
+        7)
+            # MTProxy-only mode: no Tor relay
+            RELAY_TYPE="none"
+            CONTAINER_COUNT=0
+            MTPROXY_ENABLED="true"
+            echo -e "  Selected: ${CYAN}Telegram Proxy Only${NC} (MTProxy, no Tor relay)"
+            echo ""
+            echo -e "  ${DIM}FakeTLS domain (any popular HTTPS site — you don't need to own it):${NC}"
+            echo -e "  ${DIM}  Traffic will appear as normal HTTPS to this domain.${NC}"
+            echo -e "  ${DIM}  1. cloudflare.com (recommended)${NC}"
+            echo -e "  ${DIM}  2. google.com${NC}"
+            echo -e "  ${DIM}  3. Custom (any HTTPS site, e.g. microsoft.com, amazon.com)${NC}"
+            read -p "  Domain choice [1]: " _mtp_dom_choice < /dev/tty || true
+            case "${_mtp_dom_choice:-1}" in
+                2) MTPROXY_DOMAIN="google.com" ;;
+                3)
+                    read -p "  Enter domain (e.g. microsoft.com): " _mtp_custom_dom < /dev/tty || true
+                    MTPROXY_DOMAIN="${_mtp_custom_dom:-cloudflare.com}"
+                    ;;
+                *) MTPROXY_DOMAIN="cloudflare.com" ;;
+            esac
+            echo ""
+            read -p "  Port [8443]: " _mtp_port < /dev/tty || true
+            MTPROXY_PORT="${_mtp_port:-8443}"
+            [[ "$MTPROXY_PORT" =~ ^[0-9]+$ ]] || MTPROXY_PORT=8443
+            echo ""
+            local _def_mtp_cpu="0.5"
+            local _def_mtp_mem="128m"
+            read -p "  CPU cores [${_def_mtp_cpu}]: " _mtp_cpu < /dev/tty || true
+            read -p "  RAM limit [${_def_mtp_mem}]: " _mtp_mem < /dev/tty || true
+            [ -z "$_mtp_cpu" ] && _mtp_cpu="$_def_mtp_cpu"
+            [ -z "$_mtp_mem" ] && _mtp_mem="$_def_mtp_mem"
+            [[ "$_mtp_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _mtp_cpu="$_def_mtp_cpu"
+            [[ "$_mtp_mem" =~ ^[0-9]+[mMgG]$ ]] || _mtp_mem="$_def_mtp_mem"
+            _mtp_mem=$(echo "$_mtp_mem" | tr '[:upper:]' '[:lower:]')
+            MTPROXY_CPUS="$_mtp_cpu"
+            MTPROXY_MEMORY="$_mtp_mem"
+            MTPROXY_SECRET=""  # Will be generated on first run
+            echo -e "  MTProxy: ${GREEN}Enabled${NC} (Port: ${MTPROXY_PORT}, Domain: ${MTPROXY_DOMAIN})"
+            echo ""
+            echo -e "  ${DIM}Tip: You can configure connection limits and geo-blocking in the main menu.${NC}"
             ;;
         0)
             echo -e "  ${YELLOW}Exiting setup.${NC}"
@@ -1727,6 +1936,66 @@ prompt_relay_settings() {
         echo -e "  Unbounded: ${DIM}Disabled${NC}"
     fi
 
+    # ── MTProxy (Telegram) Prompt ──
+    echo ""
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}📱 MTProxy (Telegram Proxy)${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "  Run a proxy that helps censored users access Telegram."
+    echo -e "  Uses FakeTLS to disguise traffic as normal HTTPS."
+    echo -e "  Very lightweight (~50MB RAM). Share link/QR with users."
+    echo -e "  ${DIM}Learn more: https://core.telegram.org/proxy${NC}"
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    read -p "  Enable MTProxy? [y/N] " input_mtp < /dev/tty || true
+    if [[ "$input_mtp" =~ ^[Yy]$ ]]; then
+        MTPROXY_ENABLED="true"
+        echo ""
+        echo -e "  ${DIM}FakeTLS domain (any popular HTTPS site — you don't need to own it):${NC}"
+        echo -e "  ${DIM}  Traffic will appear as normal HTTPS to this domain.${NC}"
+        echo -e "  ${DIM}  1. cloudflare.com (recommended)${NC}"
+        echo -e "  ${DIM}  2. google.com${NC}"
+        echo -e "  ${DIM}  3. Custom (any HTTPS site, e.g. microsoft.com, amazon.com)${NC}"
+        read -p "  Domain choice [1]: " _mtp_dom_choice < /dev/tty || true
+        case "${_mtp_dom_choice:-1}" in
+            2) MTPROXY_DOMAIN="google.com" ;;
+            3)
+                read -p "  Enter domain (e.g. microsoft.com): " _mtp_custom_dom < /dev/tty || true
+                MTPROXY_DOMAIN="${_mtp_custom_dom:-cloudflare.com}"
+                ;;
+            *) MTPROXY_DOMAIN="cloudflare.com" ;;
+        esac
+        echo ""
+        echo -e "  ${DIM}MTProxy uses host networking. Choose an available port.${NC}"
+        echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
+        read -p "  Port [8443]: " _mtp_port < /dev/tty || true
+        _mtp_port="${_mtp_port:-8443}"
+        if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
+            if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
+                log_warn "Port ${_mtp_port} appears to be in use. You can change it later via settings."
+            fi
+            MTPROXY_PORT="$_mtp_port"
+        else
+            MTPROXY_PORT=8443
+        fi
+        echo ""
+        local _def_mtp_cpu="0.5"
+        local _def_mtp_mem="128m"
+        read -p "  CPU cores [${_def_mtp_cpu}]: " _mtp_cpu < /dev/tty || true
+        read -p "  RAM limit [${_def_mtp_mem}]: " _mtp_mem < /dev/tty || true
+        [ -z "$_mtp_cpu" ] && _mtp_cpu="$_def_mtp_cpu"
+        [ -z "$_mtp_mem" ] && _mtp_mem="$_def_mtp_mem"
+        [[ "$_mtp_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _mtp_cpu="$_def_mtp_cpu"
+        [[ "$_mtp_mem" =~ ^[0-9]+[mMgG]$ ]] || _mtp_mem="$_def_mtp_mem"
+        _mtp_mem=$(echo "$_mtp_mem" | tr '[:upper:]' '[:lower:]')
+        MTPROXY_CPUS="$_mtp_cpu"
+        MTPROXY_MEMORY="$_mtp_mem"
+        MTPROXY_SECRET=""  # Will be generated on first run
+        echo -e "  MTProxy: ${GREEN}Enabled${NC} (Port: ${MTPROXY_PORT}, Domain: ${MTPROXY_DOMAIN})"
+    else
+        MTPROXY_ENABLED="false"
+        echo -e "  MTProxy: ${DIM}Disabled${NC}"
+    fi
+
     fi # end of relay-type != none block
 
     echo ""
@@ -1752,6 +2021,9 @@ prompt_relay_settings() {
         fi
         if [ "$UNBOUNDED_ENABLED" = "true" ]; then
             echo -e "    Unbounded:   ${GREEN}Enabled${NC} (CPU: ${UNBOUNDED_CPUS:-0.5}, RAM: ${UNBOUNDED_MEMORY:-256m})"
+        fi
+        if [ "$MTPROXY_ENABLED" = "true" ]; then
+            echo -e "    MTProxy:     ${GREEN}Enabled${NC} (Port: ${MTPROXY_PORT}, Domain: ${MTPROXY_DOMAIN})"
         fi
     else
         if [ "$has_mixed" = "true" ]; then
@@ -1796,6 +2068,9 @@ prompt_relay_settings() {
         fi
         if [ "$UNBOUNDED_ENABLED" = "true" ]; then
             echo -e "    Unbounded:   ${GREEN}Enabled${NC} (CPU: ${UNBOUNDED_CPUS:-0.5}, RAM: ${UNBOUNDED_MEMORY:-256m})"
+        fi
+        if [ "$MTPROXY_ENABLED" = "true" ]; then
+            echo -e "    MTProxy:     ${GREEN}Enabled${NC} (Port: ${MTPROXY_PORT}, Domain: ${MTPROXY_DOMAIN})"
         fi
     fi
     # Show auto-calculated resource limits (only for relay modes)
@@ -1844,6 +2119,17 @@ save_settings() {
     local _caller_unbounded_freddie="${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}"
     local _caller_unbounded_egress="${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}"
     local _caller_unbounded_tag="${UNBOUNDED_TAG:-}"
+
+    # Capture MTProxy globals
+    local _caller_mtproxy_enabled="${MTPROXY_ENABLED:-false}"
+    local _caller_mtproxy_port="${MTPROXY_PORT:-8443}"
+    local _caller_mtproxy_metrics_port="${MTPROXY_METRICS_PORT:-3129}"
+    local _caller_mtproxy_domain="${MTPROXY_DOMAIN:-cloudflare.com}"
+    local _caller_mtproxy_secret="${MTPROXY_SECRET:-}"
+    local _caller_mtproxy_cpus="${MTPROXY_CPUS:-0.5}"
+    local _caller_mtproxy_memory="${MTPROXY_MEMORY:-128m}"
+    local _caller_mtproxy_concurrency="${MTPROXY_CONCURRENCY:-8192}"
+    local _caller_mtproxy_blocklist_countries="${MTPROXY_BLOCKLIST_COUNTRIES:-}"
 
     # Preserve existing Telegram settings on reinstall
     local _caller_tg_token="${TELEGRAM_BOT_TOKEN:-}"
@@ -1899,6 +2185,17 @@ save_settings() {
     UNBOUNDED_FREDDIE="$_caller_unbounded_freddie"
     UNBOUNDED_EGRESS="$_caller_unbounded_egress"
     UNBOUNDED_TAG="$_caller_unbounded_tag"
+
+    # Restore MTProxy globals after load_settings clobbered them
+    MTPROXY_ENABLED="$_caller_mtproxy_enabled"
+    MTPROXY_PORT="$_caller_mtproxy_port"
+    MTPROXY_METRICS_PORT="$_caller_mtproxy_metrics_port"
+    MTPROXY_DOMAIN="$_caller_mtproxy_domain"
+    MTPROXY_SECRET="$_caller_mtproxy_secret"
+    MTPROXY_CPUS="$_caller_mtproxy_cpus"
+    MTPROXY_MEMORY="$_caller_mtproxy_memory"
+    MTPROXY_CONCURRENCY="$_caller_mtproxy_concurrency"
+    MTPROXY_BLOCKLIST_COUNTRIES="$_caller_mtproxy_blocklist_countries"
 
     # Restore ALL telegram globals after load_settings clobbered them
     TELEGRAM_BOT_TOKEN="$_tg_token"
@@ -1958,6 +2255,17 @@ UNBOUNDED_FREDDIE='${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}'
 UNBOUNDED_EGRESS='${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}'
 UNBOUNDED_TAG='${UNBOUNDED_TAG}'
 
+# MTProxy (Telegram Proxy)
+MTPROXY_ENABLED='${MTPROXY_ENABLED:-false}'
+MTPROXY_PORT='${MTPROXY_PORT:-8443}'
+MTPROXY_METRICS_PORT='${MTPROXY_METRICS_PORT:-3129}'
+MTPROXY_DOMAIN='${MTPROXY_DOMAIN:-cloudflare.com}'
+MTPROXY_SECRET='${MTPROXY_SECRET}'
+MTPROXY_CPUS='${MTPROXY_CPUS:-0.5}'
+MTPROXY_MEMORY='${MTPROXY_MEMORY:-128m}'
+MTPROXY_CONCURRENCY='${MTPROXY_CONCURRENCY:-8192}'
+MTPROXY_BLOCKLIST_COUNTRIES='${MTPROXY_BLOCKLIST_COUNTRIES}'
+
 # Telegram Integration
 TELEGRAM_BOT_TOKEN='${_safe_tg_token}'
 TELEGRAM_CHAT_ID='${_safe_tg_chat}'
@@ -2001,6 +2309,7 @@ EOF
     fi
     if ! mv "$_tmp" "$INSTALL_DIR/settings.conf"; then
         log_error "Failed to save settings (mv failed). Check disk space and permissions."
+        rm -f "$_tmp" 2>/dev/null
         return 1
     fi
 
@@ -2014,7 +2323,7 @@ EOF
 
 load_settings() {
     if [ -f "$INSTALL_DIR/settings.conf" ]; then
-        # Copy to temp file to avoid TOCTOU race between validation and source
+        # Copy to temp file to avoid TOCTOU race between validation and parse
         local _tmp_settings
         _tmp_settings=$(mktemp "${TMPDIR:-/tmp}/.tor_settings.XXXXXX") || return 1
         cp "$INSTALL_DIR/settings.conf" "$_tmp_settings" || { rm -f "$_tmp_settings"; return 1; }
@@ -2025,8 +2334,33 @@ load_settings() {
             rm -f "$_tmp_settings"
             return 1
         fi
-        source "$_tmp_settings" 2>/dev/null
+        # Parse key=value explicitly instead of sourcing (safer)
+        local key val line
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            # Skip empty lines and comments
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            # Match single-quoted string: VAR='value'
+            if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=\'([^\']*)\' ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[2]}"
+            # Match numeric: VAR=123
+            elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=([0-9]+)$ ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[2]}"
+            # Match boolean: VAR=true or VAR=false
+            elif [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(true|false)$ ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[2]}"
+            else
+                continue
+            fi
+            # Use declare -g to set variable in global scope safely
+            declare -g "$key=$val"
+        done < "$_tmp_settings"
         rm -f "$_tmp_settings"
+        # Sync loaded values to CONFIG array
+        config_sync_from_globals
     fi
 }
 
@@ -2127,6 +2461,11 @@ run_relay_container() {
             -e "OBFS4_ENABLE_ADDITIONAL_VARIABLES=1" \
             -e "OBFS4V_ControlPort=127.0.0.1:${controlport}" \
             -e "OBFS4V_CookieAuthentication=1" \
+            --health-cmd "nc -z 127.0.0.1 ${controlport} || exit 1" \
+            --health-interval=60s \
+            --health-timeout=10s \
+            --health-retries=3 \
+            --health-start-period=120s \
             "${bw_env[@]}" \
             "${resource_args[@]}" \
             "$image"; then
@@ -2144,6 +2483,11 @@ run_relay_container() {
             -v "${vname}:/var/lib/tor" \
             -v "${torrc_path}:/etc/tor/torrc:ro" \
             --network host \
+            --health-cmd "nc -z 127.0.0.1 ${controlport} || exit 1" \
+            --health-interval=60s \
+            --health-timeout=10s \
+            --health-retries=3 \
+            --health-start-period=120s \
             "${resource_args[@]}" \
             "$image"; then
             log_error "Failed to start $cname (relay)"
@@ -2665,6 +3009,255 @@ get_unbounded_stats() {
 }
 
 #═══════════════════════════════════════════════════════════════════════
+# MTProxy (Telegram) Management
+#═══════════════════════════════════════════════════════════════════════
+
+generate_mtproxy_secret() {
+    local domain="${1:-$MTPROXY_DOMAIN}"
+    domain="${domain:-cloudflare.com}"
+    # Generate secret using mtg container
+    docker run --rm "$MTPROXY_IMAGE" generate-secret --hex "$domain" 2>/dev/null
+}
+
+get_mtproxy_link() {
+    local server_ip="${1:-$(get_public_ip)}"
+    local port="${MTPROXY_PORT:-8443}"
+    local secret="$MTPROXY_SECRET"
+
+    if [ -z "$secret" ]; then
+        return 1
+    fi
+
+    echo "tg://proxy?server=${server_ip}&port=${port}&secret=${secret}"
+}
+
+get_mtproxy_link_https() {
+    local server_ip="${1:-$(get_public_ip)}"
+    local port="${MTPROXY_PORT:-8443}"
+    local secret="$MTPROXY_SECRET"
+
+    if [ -z "$secret" ]; then
+        return 1
+    fi
+
+    echo "https://t.me/proxy?server=${server_ip}&port=${port}&secret=${secret}"
+}
+
+show_mtproxy_qr() {
+    local link
+    link=$(get_mtproxy_link_https "$1")
+    if [ -z "$link" ]; then
+        log_error "MTProxy secret not configured"
+        return 1
+    fi
+
+    # Generate QR code using Unicode block characters
+    # Check if qrencode is available
+    if command -v qrencode &>/dev/null; then
+        echo ""
+        echo -e "${BOLD}Scan this QR code in Telegram:${NC}"
+        echo ""
+        qrencode -t ANSIUTF8 "$link"
+    else
+        # Fallback: try using Docker with qrencode image (pass link via env var for safety)
+        if docker run --rm -e "QR_LINK=$link" alpine:latest sh -c 'apk add --no-cache qrencode >/dev/null 2>&1 && qrencode -t ANSIUTF8 "$QR_LINK"' 2>/dev/null; then
+            :
+        else
+            # Final fallback: just show the link
+            echo ""
+            echo -e "${YELLOW}QR code generation not available (install qrencode for QR support)${NC}"
+            echo -e "${DIM}Install with: apt install qrencode${NC}"
+        fi
+    fi
+    echo ""
+    echo -e "${BOLD}Or share this link:${NC}"
+    echo -e "${CYAN}$link${NC}"
+    echo ""
+}
+
+is_mtproxy_running() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${MTPROXY_CONTAINER}$"
+}
+
+run_mtproxy_container() {
+    if [ "$MTPROXY_ENABLED" != "true" ]; then
+        return 0
+    fi
+
+    local cname="$MTPROXY_CONTAINER"
+    local port="${MTPROXY_PORT:-8443}"
+    local metrics_port="${MTPROXY_METRICS_PORT:-3129}"
+    local cpus="${MTPROXY_CPUS:-0.5}"
+    local memory="${MTPROXY_MEMORY:-128m}"
+    local secret="$MTPROXY_SECRET"
+    local concurrency="${MTPROXY_CONCURRENCY:-8192}"
+    local blocklist_countries="${MTPROXY_BLOCKLIST_COUNTRIES:-}"
+
+    # Generate secret if not set
+    if [ -z "$secret" ]; then
+        log_info "Generating MTProxy secret..."
+        secret=$(generate_mtproxy_secret)
+        if [ -z "$secret" ]; then
+            log_error "Failed to generate MTProxy secret"
+            return 1
+        fi
+        MTPROXY_SECRET="$secret"
+        save_settings
+    fi
+
+    # Pull image if not present
+    if ! docker image inspect "$MTPROXY_IMAGE" &>/dev/null; then
+        log_info "Pulling MTProxy image..."
+        if ! docker pull "$MTPROXY_IMAGE"; then
+            log_error "Failed to pull MTProxy image"
+            return 1
+        fi
+    fi
+
+    # Create config directory
+    local config_dir="$INSTALL_DIR/mtproxy"
+    mkdir -p "$config_dir"
+
+    # Build blocklist URLs from country codes
+    # Uses ipdeny.com country CIDR lists (reliable, updated daily)
+    local blocklist_urls=""
+    if [ -n "$blocklist_countries" ]; then
+        for cc in $(echo "$blocklist_countries" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
+            # Validate country code: must be exactly 2 lowercase letters
+            if [[ "$cc" =~ ^[a-z]{2}$ ]]; then
+                blocklist_urls+="  \"https://www.ipdeny.com/ipblocks/data/aggregated/${cc}-aggregated.zone\","$'\n'
+            fi
+        done
+    fi
+
+    # Generate TOML config (uses actual ports since we use host networking)
+    cat > "$config_dir/config.toml" << EOF
+# MTProxy configuration - generated by Torware
+secret = "$secret"
+bind-to = "0.0.0.0:${port}"
+concurrency = $concurrency
+
+[stats.prometheus]
+bind-to = "127.0.0.1:${metrics_port}"
+
+[defense.anti-replay]
+enabled = true
+max-size = "1mib"
+error-rate = 0.001
+EOF
+
+    # Add blocklist if countries specified
+    if [ -n "$blocklist_urls" ]; then
+        cat >> "$config_dir/config.toml" << EOF
+
+[defense.blocklist]
+enabled = true
+download-concurrency = 2
+update-each = "24h"
+urls = [
+$blocklist_urls]
+EOF
+        log_info "Geo-blocking enabled for: $blocklist_countries"
+    fi
+
+    # Remove existing container
+    docker rm -f "$cname" 2>/dev/null || true
+
+    # Check if port is available
+    if ss -tln 2>/dev/null | grep -q ":${port} " || netstat -tln 2>/dev/null | grep -q ":${port} "; then
+        log_error "Port ${port} is already in use. Change MTProxy port in settings."
+        return 1
+    fi
+
+    log_info "Starting MTProxy container..."
+    if docker run -d \
+        --name "$cname" \
+        --restart unless-stopped \
+        --network host \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        --cpus "$cpus" \
+        --memory "$memory" \
+        --memory-swap "$memory" \
+        -v "${config_dir}/config.toml:/config.toml:ro" \
+        "$MTPROXY_IMAGE" run /config.toml; then
+        log_success "MTProxy started on port $port (FakeTLS: ${MTPROXY_DOMAIN}, max connections: $concurrency)"
+        # Send Telegram notification with link and QR code (async, don't block startup)
+        telegram_notify_mtproxy_started &>/dev/null &
+        return 0
+    else
+        log_error "Failed to start MTProxy"
+        return 1
+    fi
+}
+
+stop_mtproxy_container() {
+    local cname="$MTPROXY_CONTAINER"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+        docker stop --timeout 10 "$cname" 2>/dev/null || true
+        log_success "MTProxy stopped"
+    fi
+}
+
+start_mtproxy_container() {
+    if [ "$MTPROXY_ENABLED" != "true" ]; then
+        return 0
+    fi
+    local cname="$MTPROXY_CONTAINER"
+    if docker ps -a --format '{{.Names}}' | grep -q "^${cname}$"; then
+        if docker start "$cname" 2>/dev/null; then
+            log_success "MTProxy started"
+        else
+            log_warn "Failed to start MTProxy, recreating..."
+            run_mtproxy_container
+        fi
+    else
+        run_mtproxy_container
+    fi
+}
+
+restart_mtproxy_container() {
+    if [ "$MTPROXY_ENABLED" != "true" ]; then
+        return 0
+    fi
+    local cname="$MTPROXY_CONTAINER"
+    docker rm -f "$cname" 2>/dev/null || true
+    run_mtproxy_container
+}
+
+get_mtproxy_stats() {
+    # Returns: "traffic_in traffic_out"
+    # Uses prometheus metrics (works with host networking)
+    if ! is_mtproxy_running; then
+        echo "0 0"
+        return
+    fi
+
+    local metrics_port="${MTPROXY_METRICS_PORT:-3129}"
+
+    # Try prometheus metrics first (reliable with host networking)
+    local metrics
+    metrics=$(curl -s --max-time 2 "http://127.0.0.1:${metrics_port}/metrics" 2>/dev/null)
+
+    if [ -n "$metrics" ]; then
+        # Parse Prometheus metrics
+        local traffic_in traffic_out
+        traffic_in=$(echo "$metrics" | awk '/^mtg_traffic_bytes\{.*direction="from_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        traffic_out=$(echo "$metrics" | awk '/^mtg_traffic_bytes\{.*direction="to_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        # If no traffic metrics yet, try alternate metric names
+        if [ -z "$traffic_in" ] || [ "$traffic_in" = "0" ]; then
+            traffic_in=$(echo "$metrics" | awk '/^mtg_client_bytes_received/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+            traffic_out=$(echo "$metrics" | awk '/^mtg_client_bytes_sent/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        fi
+        echo "${traffic_in:-0} ${traffic_out:-0}"
+        return
+    fi
+
+    # Fallback: return zeros (docker stats doesn't work with host networking)
+    echo "0 0"
+}
+
+#═══════════════════════════════════════════════════════════════════════
 # Status Display
 #═══════════════════════════════════════════════════════════════════════
 
@@ -2794,6 +3387,22 @@ show_status() {
         echo ""
     fi
 
+    # MTProxy status
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+        echo -e "  ${BOLD}MTProxy (Telegram):${NC}"
+        if is_mtproxy_running; then
+            local mtp_stats=$(get_mtproxy_stats 2>/dev/null)
+            local mtp_in=$(echo "$mtp_stats" | awk '{print $1}')
+            local mtp_out=$(echo "$mtp_stats" | awk '{print $2}')
+            echo -e "    Status: ${GREEN}RUNNING${NC}"
+            echo -e "    Traffic: ↓ $(format_bytes ${mtp_in:-0})  ↑ $(format_bytes ${mtp_out:-0})"
+            echo -e "    Port: ${MTPROXY_PORT}  |  Domain: ${MTPROXY_DOMAIN}"
+        else
+            echo -e "    Status: ${RED}STOPPED${NC}"
+        fi
+        echo ""
+    fi
+
     # Include snowflake in totals
     local total_containers=$count
     local total_running=$running
@@ -2812,6 +3421,17 @@ show_status() {
         total_containers=$((total_containers + 1))
         if is_unbounded_running; then
             total_running=$((total_running + 1))
+        fi
+    fi
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+        total_containers=$((total_containers + 1))
+        if is_mtproxy_running; then
+            total_running=$((total_running + 1))
+            local mtp_stats=$(get_mtproxy_stats 2>/dev/null)
+            local mtp_in=$(echo "$mtp_stats" | awk '{print $1}')
+            local mtp_out=$(echo "$mtp_stats" | awk '{print $2}')
+            total_read=$((total_read + ${mtp_in:-0}))
+            total_written=$((total_written + ${mtp_out:-0}))
         fi
     fi
 
@@ -2951,10 +3571,8 @@ restore_keys() {
     fi
 
     # Restore from backup
-    docker run --rm -v "${vname}:/data" -v "$(dirname "$selected"):/backup:ro" alpine \
-        sh -c "cd /data && tar -xzf '/backup/$restore_basename'" 2>/dev/null
-
-    if [ $? -eq 0 ]; then
+    if docker run --rm -v "${vname}:/data" -v "$(dirname "$selected"):/backup:ro" alpine \
+        sh -c "cd /data && tar -xzf '/backup/$restore_basename'" 2>/dev/null; then
         log_success "Keys restored to relay $target_relay"
         # Restart container
         docker start "$cname" 2>/dev/null || run_relay_container $target_relay
@@ -3148,6 +3766,248 @@ EOF
     else
         log_warn "Could not set up auto-start. Docker's restart policy will handle restarts."
     fi
+}
+
+#═══════════════════════════════════════════════════════════════════════
+# Doctor - Comprehensive Diagnostics
+#═══════════════════════════════════════════════════════════════════════
+
+run_doctor() {
+    load_settings
+    local issues=0
+    local warnings=0
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}              🩺 TORWARE DOCTOR                               ${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${BOLD}Running comprehensive diagnostics...${NC}"
+    echo ""
+
+    # 1. System Requirements
+    echo -e "  ${BOLD}[System Requirements]${NC}"
+
+    # Check disk space
+    echo -n "    Disk space:           "
+    local free_space=$(df -BG "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}' | tr -d 'G')
+    if [ "${free_space:-0}" -ge 5 ] 2>/dev/null; then
+        echo -e "${GREEN}OK${NC} (${free_space}GB free)"
+    elif [ "${free_space:-0}" -ge 2 ] 2>/dev/null; then
+        echo -e "${YELLOW}LOW${NC} (${free_space}GB free - recommend 5GB+)"
+        ((warnings++))
+    else
+        echo -e "${RED}CRITICAL${NC} (${free_space:-?}GB free)"
+        ((issues++))
+    fi
+
+    # Check RAM
+    echo -n "    Available RAM:        "
+    local free_ram=$(free -m 2>/dev/null | awk '/^Mem:/ {print $7}')
+    if [ "${free_ram:-0}" -ge 512 ] 2>/dev/null; then
+        echo -e "${GREEN}OK${NC} (${free_ram}MB available)"
+    elif [ "${free_ram:-0}" -ge 256 ] 2>/dev/null; then
+        echo -e "${YELLOW}LOW${NC} (${free_ram}MB available)"
+        ((warnings++))
+    else
+        echo -e "${RED}CRITICAL${NC} (${free_ram:-?}MB available)"
+        ((issues++))
+    fi
+
+    # Check CPU load
+    echo -n "    CPU load:             "
+    local load=$(awk '{print $1}' /proc/loadavg 2>/dev/null)
+    local cores=$(get_cpu_cores)
+    local load_pct=$(awk "BEGIN {printf \"%.0f\", ($load / $cores) * 100}" 2>/dev/null || echo "?")
+    if [ "${load_pct:-100}" -le 80 ] 2>/dev/null; then
+        echo -e "${GREEN}OK${NC} (${load_pct}%)"
+    else
+        echo -e "${YELLOW}HIGH${NC} (${load_pct}%)"
+        ((warnings++))
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}[Docker Environment]${NC}"
+
+    # Check Docker daemon
+    echo -n "    Docker daemon:        "
+    if docker info &>/dev/null; then
+        local docker_ver=$(docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        echo -e "${GREEN}OK${NC} (v${docker_ver})"
+    else
+        echo -e "${RED}FAILED${NC} - Docker is not running"
+        ((issues++))
+    fi
+
+    # Check Docker images
+    echo -n "    Bridge image:         "
+    if docker image inspect "$BRIDGE_IMAGE" &>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${YELLOW}NOT PULLED${NC} (will download on first run)"
+        ((warnings++))
+    fi
+
+    echo -n "    Relay image:          "
+    if docker image inspect "$RELAY_IMAGE" &>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${YELLOW}NOT PULLED${NC}"
+        ((warnings++))
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}[Network Connectivity]${NC}"
+
+    # Check outbound connectivity
+    echo -n "    Internet access:      "
+    if curl -s --max-time 5 https://check.torproject.org &>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    elif curl -s --max-time 5 https://www.google.com &>/dev/null; then
+        echo -e "${GREEN}OK${NC} (via Google)"
+    else
+        echo -e "${RED}FAILED${NC} - No internet connectivity"
+        ((issues++))
+    fi
+
+    # Check DNS resolution
+    echo -n "    DNS resolution:       "
+    if host torproject.org &>/dev/null || nslookup torproject.org &>/dev/null 2>&1; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC} - DNS not working"
+        ((issues++))
+    fi
+
+    # Check external IP
+    echo -n "    External IP:          "
+    local ext_ip=$(get_external_ip 2>/dev/null)
+    if [ -n "$ext_ip" ]; then
+        echo -e "${GREEN}OK${NC} (${ext_ip})"
+    else
+        echo -e "${YELLOW}UNKNOWN${NC} - Could not detect"
+        ((warnings++))
+    fi
+
+    # Check if ORPort is likely reachable
+    echo -n "    ORPort reachability:  "
+    local orport=${ORPORT_BASE:-9001}
+    if command -v nc &>/dev/null && timeout 3 nc -z 127.0.0.1 "$orport" 2>/dev/null; then
+        echo -e "${GREEN}OK${NC} (port $orport listening)"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^torware"; then
+        echo -e "${GREEN}OK${NC} (container running)"
+    else
+        echo -e "${YELLOW}NOT TESTED${NC} (container not running)"
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}[Configuration]${NC}"
+
+    # Check settings file
+    echo -n "    Settings file:        "
+    if [ -f "$INSTALL_DIR/settings.conf" ]; then
+        # Validate format
+        if grep -vE '^\s*$|^\s*#|^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''$|^[A-Za-z_][A-Za-z0-9_]*=[0-9]+$|^[A-Za-z_][A-Za-z0-9_]*=(true|false)$' "$INSTALL_DIR/settings.conf" 2>/dev/null | grep -q .; then
+            echo -e "${RED}INVALID${NC} - Contains unsafe content"
+            ((issues++))
+        else
+            echo -e "${GREEN}OK${NC}"
+        fi
+    else
+        echo -e "${YELLOW}MISSING${NC}"
+        ((warnings++))
+    fi
+
+    # Check data volumes
+    echo -n "    Data volumes:         "
+    local vol_count=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -c "^relay-data" || echo 0)
+    if [ "$vol_count" -gt 0 ]; then
+        echo -e "${GREEN}OK${NC} (${vol_count} volume(s))"
+    else
+        echo -e "${YELLOW}NONE${NC} (will be created on first run)"
+    fi
+
+    # Check relay keys backup
+    echo -n "    Relay key backups:    "
+    local backup_count=$(ls -1 "$BACKUP_DIR"/*.tar.gz 2>/dev/null | wc -l)
+    if [ "$backup_count" -gt 0 ]; then
+        echo -e "${GREEN}OK${NC} (${backup_count} backup(s))"
+    else
+        echo -e "${YELLOW}NONE${NC} - Consider running 'torware backup'"
+        ((warnings++))
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}[Container Health]${NC}"
+
+    # Check running containers
+    local count=${CONTAINER_COUNT:-1}
+    if [ "$count" -gt 0 ] && [ "$RELAY_TYPE" != "none" ]; then
+        for i in $(seq 1 $count); do
+            local cname=$(get_container_name $i)
+            echo -n "    ${cname}:  "
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+                local health=$(docker inspect --format='{{.State.Health.Status}}' "$cname" 2>/dev/null || echo "none")
+                case "$health" in
+                    healthy) echo -e "${GREEN}HEALTHY${NC}" ;;
+                    unhealthy) echo -e "${RED}UNHEALTHY${NC}"; ((issues++)) ;;
+                    starting) echo -e "${YELLOW}STARTING${NC}" ;;
+                    *) echo -e "${GREEN}RUNNING${NC} (no health check)" ;;
+                esac
+            elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+                echo -e "${RED}STOPPED${NC}"
+                ((issues++))
+            else
+                echo -e "${DIM}NOT CREATED${NC}"
+            fi
+        done
+    fi
+
+    # Check proxy containers
+    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+        echo -n "    snowflake-proxy:      "
+        if is_snowflake_running; then
+            echo -e "${GREEN}RUNNING${NC}"
+        else
+            echo -e "${RED}STOPPED${NC}"
+            ((issues++))
+        fi
+    fi
+
+    if [ "$UNBOUNDED_ENABLED" = "true" ]; then
+        echo -n "    unbounded-proxy:      "
+        if is_unbounded_running; then
+            echo -e "${GREEN}RUNNING${NC}"
+        else
+            echo -e "${RED}STOPPED${NC}"
+            ((issues++))
+        fi
+    fi
+
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+        echo -n "    mtproxy:              "
+        if is_mtproxy_running; then
+            echo -e "${GREEN}RUNNING${NC}"
+        else
+            echo -e "${RED}STOPPED${NC}"
+            ((issues++))
+        fi
+    fi
+
+    # Summary
+    echo ""
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    if [ "$issues" -eq 0 ] && [ "$warnings" -eq 0 ]; then
+        echo -e "  ${GREEN}${BOLD}✓ All checks passed!${NC}"
+    elif [ "$issues" -eq 0 ]; then
+        echo -e "  ${YELLOW}${BOLD}⚠ ${warnings} warning(s), no critical issues${NC}"
+    else
+        echo -e "  ${RED}${BOLD}✗ ${issues} issue(s), ${warnings} warning(s)${NC}"
+    fi
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    return $issues
 }
 
 #═══════════════════════════════════════════════════════════════════════
@@ -3364,6 +4224,29 @@ health_check() {
         fi
     fi
 
+    # MTProxy health
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+        local _mtpn="$MTPROXY_CONTAINER"
+        local _mtpm="${MTPROXY_METRICS_PORT:-3129}"
+        echo ""
+        echo -e "  ${BOLD}--- ${_mtpn} ---${NC}"
+
+        echo -n "  Container running:    "
+        if is_mtproxy_running; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}STOPPED${NC}"
+            all_ok=false
+        fi
+
+        echo -n "  Metrics endpoint:     "
+        if curl -s --max-time 3 "http://127.0.0.1:${_mtpm}/metrics" &>/dev/null; then
+            echo -e "${GREEN}OK (port $_mtpm)${NC}"
+        else
+            echo -e "${YELLOW}NOT ACCESSIBLE${NC}"
+        fi
+    fi
+
     echo ""
     if [ "$all_ok" = "true" ]; then
         echo -e "  ${GREEN}✓ All health checks passed${NC}"
@@ -3388,6 +4271,12 @@ get_container_stats() {
             local _sfn=$(get_snowflake_name $_sfi)
             docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sfn}$" && names+=" $_sfn"
         done
+    fi
+    if [ "$UNBOUNDED_ENABLED" = "true" ] && is_unbounded_running; then
+        names+=" $UNBOUNDED_CONTAINER"
+    fi
+    if [ "$MTPROXY_ENABLED" = "true" ] && is_mtproxy_running; then
+        names+=" $MTPROXY_CONTAINER"
     fi
     local all_stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $names 2>/dev/null)
     local _nlines=$(echo "$all_stats" | wc -l)
@@ -3542,6 +4431,9 @@ show_dashboard() {
         if [ "$UNBOUNDED_ENABLED" = "true" ] && echo "$_running_containers" | grep -q "^${UNBOUNDED_CONTAINER}$"; then
             ( get_unbounded_stats > "$_tmpdir/ub_stats" ) 2>/dev/null &
         fi
+        if [ "$MTPROXY_ENABLED" = "true" ] && echo "$_running_containers" | grep -q "^${MTPROXY_CONTAINER}$"; then
+            ( get_mtproxy_stats > "$_tmpdir/mtp_stats" ) 2>/dev/null &
+        fi
         if [ "${DATA_CAP_GB}" -gt 0 ] 2>/dev/null; then
             ( controlport_query "$(get_container_controlport 1)" \
                 "GETINFO accounting/bytes" \
@@ -3593,9 +4485,11 @@ show_dashboard() {
         # Normalize App CPU
         local raw_app_cpu=$(echo "$stats" | awk '{print $1}' | tr -d '%')
         local num_cores=$(get_cpu_cores)
+        # Ensure num_cores is at least 1 to prevent division by zero
+        [ "${num_cores:-0}" -lt 1 ] 2>/dev/null && num_cores=1
         local app_cpu_display="0%"
         if [[ "$raw_app_cpu" =~ ^[0-9.]+$ ]]; then
-            app_cpu_display=$(awk -v cpu="$raw_app_cpu" -v cores="$num_cores" 'BEGIN {printf "%.2f%%", cpu / cores}')
+            app_cpu_display=$(awk -v cpu="$raw_app_cpu" -v cores="$num_cores" 'BEGIN {printf "%.2f%%", (cores > 0) ? cpu / cores : 0}')
             if [ "$num_cores" -gt 1 ]; then
                 app_cpu_display="${app_cpu_display} (${raw_app_cpu}% vCPU)"
             fi
@@ -3641,6 +4535,16 @@ show_dashboard() {
                 local _ub_out=$(echo "$_cached_ub_stats" | awk '{print $3}'); _ub_out=${_ub_out:-0}
                 total_read=$((total_read + _ub_in))
                 total_written=$((total_written + _ub_out))
+            fi
+
+            # Include MTProxy in totals (from parallel-fetched cache)
+            local _cached_mtp_stats=""
+            if [ -f "$_tmpdir/mtp_stats" ]; then
+                _cached_mtp_stats=$(cat "$_tmpdir/mtp_stats")
+                local _mtp_in=$(echo "$_cached_mtp_stats" | awk '{print $1}'); _mtp_in=${_mtp_in:-0}
+                local _mtp_out=$(echo "$_cached_mtp_stats" | awk '{print $2}'); _mtp_out=${_mtp_out:-0}
+                total_read=$((total_read + _mtp_in))
+                total_written=$((total_written + _mtp_out))
             fi
 
             echo -e "${EL}"
@@ -3855,6 +4759,21 @@ show_dashboard() {
             echo -e "${EL}"
         fi
 
+        # MTProxy stats (from parallel-fetched cache)
+        if [ "$MTPROXY_ENABLED" = "true" ]; then
+            echo -e "${CYAN}═══ MTProxy (Telegram) ═══${NC}${EL}"
+            if [ -f "$_tmpdir/mtp_stats" ]; then
+                local mtp_stats=$(cat "$_tmpdir/mtp_stats")
+                local mtp_in=$(echo "$mtp_stats" | awk '{print $1}')
+                local mtp_out=$(echo "$mtp_stats" | awk '{print $2}')
+                echo -e "  Status: ${GREEN}Running${NC}  Traffic: ↓ $(format_bytes ${mtp_in:-0})  ↑ $(format_bytes ${mtp_out:-0})${EL}"
+                echo -e "  Port: ${MTPROXY_PORT}  |  FakeTLS Domain: ${MTPROXY_DOMAIN}${EL}"
+            else
+                echo -e "  Status: ${RED}Stopped${NC}${EL}"
+            fi
+            echo -e "${EL}"
+        fi
+
         # Per-container status (compact) — reuse parallel-fetched data
         if [ "$count" -gt 1 ]; then
             echo -e "${CYAN}═══ Per-Container ═══${NC}${EL}"
@@ -4033,6 +4952,24 @@ show_advanced_stats() {
                 "$_ub_cname" "$ub_status" "–" "–" "–" "${ub_live_adv:-0}" "${ub_cpu:-–}"
         fi
 
+        # MTProxy row
+        if [ "$MTPROXY_ENABLED" = "true" ]; then
+            local _mtp_cname="$MTPROXY_CONTAINER"
+            local mtp_status="${RED}STOPPED${NC}"
+            local mtp_dl="" mtp_ul="" mtp_cpu=""
+            if echo "$_adv_running" | grep -q "^${_mtp_cname}$"; then
+                mtp_status="${GREEN}RUNNING${NC}"
+                local mtp_stats=$(get_mtproxy_stats 2>/dev/null)
+                local mtp_in=$(echo "$mtp_stats" | awk '{print $1}')
+                local mtp_out=$(echo "$mtp_stats" | awk '{print $2}')
+                mtp_dl=$(format_bytes ${mtp_in:-0})
+                mtp_ul=$(format_bytes ${mtp_out:-0})
+                mtp_cpu=$(echo "$docker_stats_out" | grep "^${_mtp_cname} " | awk '{print $2}')
+            fi
+            printf "  %-18s %-20b %-10s %-10s %-8s %-8s %-8s${EL}\n" \
+                "$_mtp_cname" "$mtp_status" "${mtp_dl:-–}" "${mtp_ul:-–}" "–" "–" "${mtp_cpu:-–}"
+        fi
+
         echo -e "${EL}"
 
         # Snowflake detailed stats (from cached parallel data)
@@ -4114,6 +5051,17 @@ show_advanced_stats() {
                 local _ub_alltime=$(echo "$_ub_detail" | awk '{print $2}')
                 echo -e "  Live connections: ${GREEN}${_ub_live:-0}${NC}  |  All-time served: ${_ub_alltime:-0}${EL}"
             fi
+            echo -e "${EL}"
+        fi
+
+        # MTProxy detailed stats
+        if [ "$MTPROXY_ENABLED" = "true" ] && is_mtproxy_running; then
+            echo -e "${CYAN}═══ MTProxy (Telegram) ═══${NC}${EL}"
+            local _mtp_detail=$(get_mtproxy_stats 2>/dev/null)
+            local _mtp_in=$(echo "$_mtp_detail" | awk '{print $1}')
+            local _mtp_out=$(echo "$_mtp_detail" | awk '{print $2}')
+            echo -e "  Traffic: ↓ $(format_bytes ${_mtp_in:-0})  ↑ $(format_bytes ${_mtp_out:-0})${EL}"
+            echo -e "  Port: ${CYAN}${MTPROXY_PORT}${NC}  |  FakeTLS Domain: ${CYAN}${MTPROXY_DOMAIN}${NC}${EL}"
             echo -e "${EL}"
         fi
 
@@ -4214,11 +5162,11 @@ show_peers() {
                 done <<< "$snap_data"
                 [ "$total" -eq 0 ] && total=1
 
+                # Limit to top 5-10 countries based on terminal size
                 local _term_rows=$(tput lines 2>/dev/null || echo 24)
-                # Reserve rows for header(4) + snowflake section(~20) + footer(3)
                 local _max_countries=$((_term_rows - 27))
                 [ "$_max_countries" -lt 5 ] && _max_countries=5
-                [ "$_max_countries" -gt 30 ] && _max_countries=30
+                [ "$_max_countries" -gt 10 ] && _max_countries=10
 
                 printf "  ${BOLD}%-20s %6s %8s   %-30s${NC}${EL}\n" "Country" "Traffic" "Pct" "Activity"
 
@@ -4244,18 +5192,20 @@ show_peers() {
             echo -e "  ${DIM}New bridges can take hours to receive clients from Tor's distributor.${NC}${EL}"
         fi
 
-        # Snowflake section
+        # Snowflake section (parallel fetch)
         local _peers_running
         _peers_running=$(docker ps --format '{{.Names}}' 2>/dev/null)
+        local _peers_tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/.tor_peers.$$.XXXXXX")
         if [ "$SNOWFLAKE_ENABLED" = "true" ] && echo "$_peers_running" | grep -q "^snowflake-proxy$"; then
+            ( get_snowflake_country_stats > "$_peers_tmpdir/sf_countries" ) 2>/dev/null &
+            ( get_snowflake_stats > "$_peers_tmpdir/sf_stats" ) 2>/dev/null &
+            wait
             echo -e "${EL}"
             local _sf_label2="Snowflake Proxy (WebRTC)"
             [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && _sf_label2="Snowflake Proxy (WebRTC) x${SNOWFLAKE_COUNT}"
             echo -e "${CYAN}═══ ${_sf_label2} ═══${NC}${EL}"
-            local _sf_country
-            _sf_country=$(get_snowflake_country_stats 2>/dev/null)
-            local _sf_stats
-            _sf_stats=$(get_snowflake_stats 2>/dev/null)
+            local _sf_country=$(cat "$_peers_tmpdir/sf_countries" 2>/dev/null)
+            local _sf_stats=$(cat "$_peers_tmpdir/sf_stats" 2>/dev/null)
             local _sf_conns=$(echo "$_sf_stats" | awk '{print $1}')
             local _sf_in=$(echo "$_sf_stats" | awk '{print $2}')
             local _sf_out=$(echo "$_sf_stats" | awk '{print $3}')
@@ -4269,7 +5219,7 @@ show_peers() {
                 [ "$_sf_total" -eq 0 ] && _sf_total=1
                 echo -e "${EL}"
                 printf "  ${BOLD}%-20s %6s %8s   %-30s${NC}${EL}\n" "Country" "Conns" "Pct" "Activity"
-                echo "$_sf_country" | head -15 | while IFS='|' read -r _scnt _scountry; do
+                echo "$_sf_country" | head -5 | while IFS='|' read -r _scnt _scountry; do
                     [ -z "$_scountry" ] && continue
                     _scountry=$(country_code_to_name "$_scountry")
                     local _spct=$((_scnt * 100 / _sf_total))
@@ -4281,6 +5231,7 @@ show_peers() {
                 echo -e "  ${DIM}No Snowflake clients yet. Waiting for broker to assign connections...${NC}${EL}"
             fi
         fi
+        rm -rf "$_peers_tmpdir" 2>/dev/null
 
         echo -e "${EL}"
         echo -e "${BOLD}Refreshes every 15 seconds. Press any key to return...${NC}${EL}"
@@ -4382,8 +5333,8 @@ regenerate_tracker_script() {
 # Torware Tracker - Background ControlPort Monitor
 # Generated by torware.sh
 
-if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
-    echo "Error: torware-tracker requires bash 4+ (for associative arrays)" >&2
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || { [ "${BASH_VERSINFO[0]:-0}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 2 ]; }; then
+    echo "Error: torware-tracker requires bash 4.2+ (for associative arrays)" >&2
     exit 1
 fi
 
@@ -5188,7 +6139,12 @@ telegram_generate_notify_script() {
 # Runs as a systemd service, sends periodic status reports
 INSTALL_DIR="REPLACE_INSTALL_DIR"
 
-[ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+# Safe settings load with whitelist validation
+if [ -f "$INSTALL_DIR/settings.conf" ]; then
+    if ! grep -vE '^\s*$|^\s*#|^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''$|^[A-Za-z_][A-Za-z0-9_]*=[0-9]+$|^[A-Za-z_][A-Za-z0-9_]*=(true|false)$' "$INSTALL_DIR/settings.conf" 2>/dev/null | grep -q .; then
+        source "$INSTALL_DIR/settings.conf"
+    fi
+fi
 
 # Exit if not configured
 [ "$TELEGRAM_ENABLED" != "true" ] && exit 0
@@ -5234,6 +6190,73 @@ telegram_send() {
         --data-urlencode "parse_mode=Markdown" \
         >/dev/null 2>&1
     rm -f "$_cfg"
+}
+
+telegram_send_photo() {
+    local photo_url="$1"
+    local caption="${2:-}"
+    local token="${TELEGRAM_BOT_TOKEN}"
+    local chat_id="${TELEGRAM_CHAT_ID}"
+    { [ -z "$token" ] || [ -z "$chat_id" ]; } && return 1
+    local label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
+    if [ -n "$caption" ]; then
+        caption="[${label}] ${caption}"
+    fi
+    local _cfg
+    _cfg=$(mktemp "${TMPDIR:-/tmp}/.tg_curl.XXXXXX") || return 1
+    chmod 600 "$_cfg"
+    printf 'url = "https://api.telegram.org/bot%s/sendPhoto"\n' "$token" > "$_cfg"
+    curl -s --max-time 15 --max-filesize 10485760 -X POST \
+        -K "$_cfg" \
+        --data-urlencode "chat_id=${chat_id}" \
+        --data-urlencode "photo=${photo_url}" \
+        --data-urlencode "caption=${caption}" \
+        --data-urlencode "parse_mode=Markdown" \
+        >/dev/null 2>&1
+    rm -f "$_cfg"
+}
+
+telegram_notify_mtproxy_started() {
+    # Send MTProxy link and QR code to Telegram when proxy starts
+    local token="${TELEGRAM_BOT_TOKEN}"
+    local chat_id="${TELEGRAM_CHAT_ID}"
+    { [ -z "$token" ] || [ -z "$chat_id" ]; } && return 0
+    [ "$TELEGRAM_ENABLED" != "true" ] && return 0
+    [ "$MTPROXY_ENABLED" != "true" ] && return 0
+
+    local server_ip
+    server_ip=$(get_public_ip)
+    [ -z "$server_ip" ] && return 1
+
+    local port="${MTPROXY_PORT:-8443}"
+    local secret="$MTPROXY_SECRET"
+    [ -z "$secret" ] && return 1
+
+    local https_link="https://t.me/proxy?server=${server_ip}&port=${port}&secret=${secret}"
+    local tg_link="tg://proxy?server=${server_ip}&port=${port}&secret=${secret}"
+
+    # URL-encode the link for QR code API
+    local encoded_link
+    encoded_link=$(printf '%s' "$https_link" | sed 's/&/%26/g; s/?/%3F/g; s/=/%3D/g; s/:/%3A/g; s|/|%2F|g')
+    local qr_url="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encoded_link}"
+
+    # Send message with links
+    local message="📱 *MTProxy Started*
+
+🔗 *Proxy Link (tap to add):*
+\`${tg_link}\`
+
+🌐 *Web Link:*
+${https_link}
+
+📊 Port: ${port} | Domain: ${MTPROXY_DOMAIN}
+
+_Share the QR code below with users who need access._"
+
+    telegram_send "$message"
+
+    # Send QR code as photo
+    telegram_send_photo "$qr_url" "📱 *MTProxy QR Code* — Scan in Telegram to connect"
 }
 
 get_container_name() {
@@ -5282,6 +6305,170 @@ calc_uptime_pct() {
     done < "$log_file"
     [ "$total" -eq 0 ] && echo "0" && return
     awk "BEGIN {printf \"%.1f\", ($up/$total)*100}" 2>/dev/null || echo "0"
+}
+
+#═══════════════════════════════════════════════════════════════════════
+# Bandwidth History & Graphs
+#═══════════════════════════════════════════════════════════════════════
+
+record_bandwidth_sample() {
+    # Record current bandwidth to hourly history file
+    # Format: timestamp|download_bytes|upload_bytes
+    local history_file="$STATS_DIR/bandwidth_history"
+    local now=$(date +%s)
+    local hour=$(date +%Y-%m-%d-%H)
+
+    # Get current total traffic
+    local total_down=0 total_up=0
+    local count=${CONTAINER_COUNT:-1}
+
+    for i in $(seq 1 $count); do
+        local cname=$(get_container_name $i)
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+            local stats=$(docker logs --tail 1000 "$cname" 2>&1 | grep -oE 'Heartbeat:.*' | tail -1)
+            local down=$(echo "$stats" | grep -oE 'Read [0-9]+' | grep -oE '[0-9]+' || echo 0)
+            local up=$(echo "$stats" | grep -oE 'Written [0-9]+' | grep -oE '[0-9]+' || echo 0)
+            total_down=$((total_down + ${down:-0}))
+            total_up=$((total_up + ${up:-0}))
+        fi
+    done
+
+    # Add snowflake traffic
+    if is_snowflake_running; then
+        local sf_stats=$(get_snowflake_stats 2>/dev/null)
+        local sf_in=$(echo "$sf_stats" | awk '{print $2}')
+        local sf_out=$(echo "$sf_stats" | awk '{print $3}')
+        total_down=$((total_down + ${sf_in:-0}))
+        total_up=$((total_up + ${sf_out:-0}))
+    fi
+
+    # Add MTProxy traffic
+    if is_mtproxy_running; then
+        local mtp_stats=$(get_mtproxy_stats 2>/dev/null)
+        local mtp_in=$(echo "$mtp_stats" | awk '{print $1}')
+        local mtp_out=$(echo "$mtp_stats" | awk '{print $2}')
+        total_down=$((total_down + ${mtp_in:-0}))
+        total_up=$((total_up + ${mtp_out:-0}))
+    fi
+
+    # Append to history (keep last 24 hours = 24 entries max)
+    echo "${hour}|${total_down}|${total_up}" >> "$history_file"
+
+    # Trim to last 24 entries
+    if [ -f "$history_file" ]; then
+        tail -24 "$history_file" > "${history_file}.tmp"
+        mv "${history_file}.tmp" "$history_file"
+    fi
+}
+
+draw_ascii_graph() {
+    # Draw an ASCII bar graph
+    # Args: title, max_width, values (space-separated)
+    local title="$1"
+    local max_width=${2:-40}
+    shift 2
+    local values=("$@")
+    local max_val=1
+
+    # Find max value
+    for v in "${values[@]}"; do
+        [ "${v:-0}" -gt "$max_val" ] 2>/dev/null && max_val="$v"
+    done
+
+    echo -e "  ${BOLD}${title}${NC}"
+    echo -e "  ${DIM}$(printf '%.0s─' $(seq 1 $((max_width + 10))))${NC}"
+
+    local hour_offset=$((24 - ${#values[@]}))
+    local idx=0
+    for v in "${values[@]}"; do
+        local bar_len=0
+        if [ "$max_val" -gt 0 ] 2>/dev/null; then
+            bar_len=$((v * max_width / max_val))
+        fi
+        [ "$bar_len" -lt 0 ] && bar_len=0
+        [ "$bar_len" -gt "$max_width" ] && bar_len=$max_width
+
+        local hour_label=$((hour_offset + idx))
+        local bar=""
+        if [ "$bar_len" -gt 0 ]; then
+            bar=$(printf '█%.0s' $(seq 1 $bar_len))
+        fi
+
+        # Format value for display
+        local display_val
+        if [ "$v" -ge 1073741824 ] 2>/dev/null; then
+            display_val=$(awk "BEGIN {printf \"%.1fG\", $v/1073741824}")
+        elif [ "$v" -ge 1048576 ] 2>/dev/null; then
+            display_val=$(awk "BEGIN {printf \"%.1fM\", $v/1048576}")
+        elif [ "$v" -ge 1024 ] 2>/dev/null; then
+            display_val=$(awk "BEGIN {printf \"%.1fK\", $v/1024}")
+        else
+            display_val="${v}B"
+        fi
+
+        printf "  %2dh │${GREEN}%-${max_width}s${NC}│ %s\n" "$hour_label" "$bar" "$display_val"
+        ((idx++))
+    done
+    echo ""
+}
+
+show_bandwidth_graphs() {
+    local history_file="$STATS_DIR/bandwidth_history"
+
+    if [ ! -f "$history_file" ] || [ ! -s "$history_file" ]; then
+        echo -e "  ${YELLOW}No bandwidth history available yet.${NC}"
+        echo -e "  ${DIM}History is recorded hourly. Check back later.${NC}"
+        return
+    fi
+
+    # Read history into arrays
+    local -a hours=() downloads=() uploads=()
+    while IFS='|' read -r hour down up; do
+        hours+=("$hour")
+        downloads+=("${down:-0}")
+        uploads+=("${up:-0}")
+    done < "$history_file"
+
+    # Calculate deltas (difference between consecutive readings)
+    local -a down_deltas=() up_deltas=()
+    local prev_down=0 prev_up=0
+    for i in "${!downloads[@]}"; do
+        local d=${downloads[$i]:-0}
+        local u=${uploads[$i]:-0}
+        if [ "$i" -eq 0 ]; then
+            down_deltas+=(0)
+            up_deltas+=(0)
+        else
+            local dd=$((d - prev_down))
+            local ud=$((u - prev_up))
+            [ "$dd" -lt 0 ] && dd=0
+            [ "$ud" -lt 0 ] && ud=0
+            down_deltas+=("$dd")
+            up_deltas+=("$ud")
+        fi
+        prev_down=$d
+        prev_up=$u
+    done
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}              📊 BANDWIDTH GRAPHS (Last 24h)                   ${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    draw_ascii_graph "Download Traffic (hourly)" 35 "${down_deltas[@]}"
+    draw_ascii_graph "Upload Traffic (hourly)" 35 "${up_deltas[@]}"
+
+    # Summary
+    local total_down=0 total_up=0
+    for d in "${down_deltas[@]}"; do total_down=$((total_down + d)); done
+    for u in "${up_deltas[@]}"; do total_up=$((total_up + u)); done
+
+    echo -e "  ${BOLD}24h Summary:${NC}"
+    echo -e "    Download: ${GREEN}$(format_bytes $total_down)${NC}"
+    echo -e "    Upload:   ${GREEN}$(format_bytes $total_up)${NC}"
+    echo -e "    Total:    ${GREEN}$(format_bytes $((total_down + total_up)))${NC}"
+    echo ""
 }
 
 rotate_cumulative_data() {
@@ -5824,6 +7011,47 @@ except Exception:
                     telegram_send "$ub_msg"
                 fi
                 ;;
+            /tor_mtproxy|/tor_mtproxy@*)
+                if [ "${MTPROXY_ENABLED:-false}" != "true" ]; then
+                    telegram_send "📱 MTProxy is not enabled."
+                elif ! is_mtproxy_running; then
+                    telegram_send "📱 *MTProxy (Telegram)*
+🔴 Status: Stopped"
+                else
+                    local _mtp_agg=$(get_mtproxy_stats 2>/dev/null)
+                    local mtp_in=$(echo "$_mtp_agg" | awk '{print $1}')
+                    local mtp_out=$(echo "$_mtp_agg" | awk '{print $2}')
+                    mtp_in=${mtp_in:-0}; mtp_out=${mtp_out:-0}
+                    local mtp_started=$(docker inspect --format='{{.State.StartedAt}}' "$MTPROXY_CONTAINER" 2>/dev/null | cut -d'.' -f1)
+                    local mtp_uptime="unknown"
+                    if [ -n "$mtp_started" ]; then
+                        local mtp_se=$(date -d "$mtp_started" +%s 2>/dev/null || echo 0)
+                        if [ "$mtp_se" -gt 0 ] 2>/dev/null; then
+                            local mtp_diff=$(( $(date +%s) - mtp_se ))
+                            local mtp_d=$((mtp_diff / 86400)) mtp_h=$(( (mtp_diff % 86400) / 3600 )) mtp_m=$(( (mtp_diff % 3600) / 60 ))
+                            [ "$mtp_d" -gt 0 ] && mtp_uptime="${mtp_d}d ${mtp_h}h ${mtp_m}m" || mtp_uptime="${mtp_h}h ${mtp_m}m"
+                        fi
+                    fi
+                    local mtp_msg="📱 *MTProxy (Telegram)*
+🟢 Status: Running
+⏱ Uptime: ${mtp_uptime}
+📊 Traffic: ↓ $(format_bytes $mtp_in) ↑ $(format_bytes $mtp_out)
+🔗 Port: ${MTPROXY_PORT} | Domain: ${MTPROXY_DOMAIN}
+
+_Use /tor\_mtproxy\_qr to get the proxy link and QR code._"
+                    telegram_send "$mtp_msg"
+                fi
+                ;;
+            /tor_mtproxy_qr|/tor_mtproxy_qr@*)
+                if [ "${MTPROXY_ENABLED:-false}" != "true" ]; then
+                    telegram_send "📱 MTProxy is not enabled."
+                elif ! is_mtproxy_running; then
+                    telegram_send "📱 MTProxy is not running. Start it first."
+                else
+                    # Send the link and QR code
+                    telegram_notify_mtproxy_started
+                fi
+                ;;
             /tor_help|/tor_help@*)
                 telegram_send "📖 *Available Commands*
 /tor\_status — Full status report
@@ -5832,6 +7060,8 @@ except Exception:
 /tor\_containers — Per-container status
 /tor\_snowflake — Snowflake proxy details
 /tor\_unbounded — Unbounded (Lantern) proxy details
+/tor\_mtproxy — MTProxy (Telegram) proxy details
+/tor\_mtproxy\_qr — Get MTProxy link and QR code
 /tor\_restart\_N — Restart container N
 /tor\_stop\_N — Stop container N
 /tor\_start\_N — Start container N
@@ -5868,8 +7098,12 @@ last_report_ts=$(cat "$_ts_dir/.last_report_ts" 2>/dev/null || echo 0)
 while true; do
     sleep 60
 
-    # Re-read settings
-    [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+    # Re-read settings (with validation)
+    if [ -f "$INSTALL_DIR/settings.conf" ]; then
+        if ! grep -vE '^\s*$|^\s*#|^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''$|^[A-Za-z_][A-Za-z0-9_]*=[0-9]+$|^[A-Za-z_][A-Za-z0-9_]*=(true|false)$' "$INSTALL_DIR/settings.conf" 2>/dev/null | grep -q .; then
+            source "$INSTALL_DIR/settings.conf"
+        fi
+    fi
 
     # Exit if disabled
     [ "$TELEGRAM_ENABLED" != "true" ] && exit 0
@@ -5981,7 +7215,7 @@ telegram_disable_service() {
 show_telegram_menu() {
     while true; do
         # Reload settings from disk to reflect any changes
-        [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+        load_settings
         clear
         print_header
         if [ "$TELEGRAM_ENABLED" = "true" ] && [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
@@ -6008,6 +7242,9 @@ show_telegram_menu() {
             echo -e "  7. 📊 Weekly summary:           ${weekly_st}"
             local cur_label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
             echo -e "  8. 🏷  Server label:            ${CYAN}${cur_label}${NC}"
+            if [ "$MTPROXY_ENABLED" = "true" ]; then
+                echo -e "  9. 📱 Send MTProxy link & QR"
+            fi
             echo -e "  0. ← Back"
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
             echo ""
@@ -6113,6 +7350,24 @@ show_telegram_menu() {
                     local display_label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
                     echo -e "  ${GREEN}✓ Server label set to: ${display_label}${NC}"
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    ;;
+                9)
+                    echo ""
+                    if [ "$MTPROXY_ENABLED" != "true" ]; then
+                        log_warn "MTProxy is not enabled. Enable it first from the main menu."
+                        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    elif ! is_mtproxy_running; then
+                        log_warn "MTProxy is not running. Start it first with 'torware start'."
+                        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    else
+                        echo -ne "  Sending MTProxy link & QR code... "
+                        if telegram_notify_mtproxy_started; then
+                            echo -e "${GREEN}✓ Sent!${NC}"
+                        else
+                            echo -e "${RED}✗ Failed${NC}"
+                        fi
+                        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    fi
                     ;;
                 0) return ;;
             esac
@@ -6305,11 +7560,16 @@ uninstall() {
     docker rm -f "$UNBOUNDED_CONTAINER" 2>/dev/null || true
     docker volume rm "$UNBOUNDED_VOLUME" 2>/dev/null || true
 
+    # Stop and remove MTProxy
+    docker stop --timeout 10 "$MTPROXY_CONTAINER" 2>/dev/null || true
+    docker rm -f "$MTPROXY_CONTAINER" 2>/dev/null || true
+
     # Remove images
     docker rmi "$BRIDGE_IMAGE" 2>/dev/null || true
     docker rmi "$RELAY_IMAGE" 2>/dev/null || true
     docker rmi "$SNOWFLAKE_IMAGE" 2>/dev/null || true
     docker rmi "$UNBOUNDED_IMAGE" 2>/dev/null || true
+    docker rmi "$MTPROXY_IMAGE" 2>/dev/null || true
 
     # Remove files
     if [ "$keep_backups" = "true" ]; then
@@ -6361,6 +7621,12 @@ show_logs() {
         echo -e "    ${GREEN}${_opt}.${NC} ${UNBOUNDED_CONTAINER} (Lantern proxy)"
         _opt=$((_opt + 1))
     fi
+    local _mtp_opt=""
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+        _mtp_opt=$_opt
+        echo -e "    ${GREEN}${_opt}.${NC} ${MTPROXY_CONTAINER} (Telegram proxy)"
+        _opt=$((_opt + 1))
+    fi
     echo -e "    ${GREEN}0.${NC} ← Back"
     echo ""
     read -p "  choice: " choice < /dev/tty || return
@@ -6370,7 +7636,9 @@ show_logs() {
     local cname=""
     local _sf_start=$((count + 1))
     local _sf_end=$((count + ${SNOWFLAKE_COUNT:-1}))
-    if [ -n "$_ub_opt" ] && [ "$choice" = "$_ub_opt" ] 2>/dev/null; then
+    if [ -n "$_mtp_opt" ] && [ "$choice" = "$_mtp_opt" ] 2>/dev/null; then
+        cname="$MTPROXY_CONTAINER"
+    elif [ -n "$_ub_opt" ] && [ "$choice" = "$_ub_opt" ] 2>/dev/null; then
         cname="$UNBOUNDED_CONTAINER"
     elif [ "$SNOWFLAKE_ENABLED" = "true" ] && [ "$choice" -ge "$_sf_start" ] 2>/dev/null && [ "$choice" -le "$_sf_end" ] 2>/dev/null; then
         local _sf_idx=$((choice - count))
@@ -6431,6 +7699,7 @@ show_help() {
     echo -e "    ${GREEN}restore${NC}       Restore relay keys from backup"
     echo -e "    ${GREEN}snowflake${NC}     Toggle/manage Snowflake proxy"
     echo -e "    ${GREEN}unbounded${NC}     Toggle/manage Unbounded (Lantern) proxy"
+    echo -e "    ${GREEN}mtproxy${NC}       Toggle/manage MTProxy (Telegram) proxy"
     echo -e "    ${GREEN}version${NC}       Show version info"
     echo -e "    ${GREEN}uninstall${NC}     Remove Torware"
     echo ""
@@ -6455,13 +7724,14 @@ show_about() {
         echo -e "    ${GREEN}4.${NC} 🚪 Exit Relays"
         echo -e "    ${GREEN}5.${NC} ❄  Snowflake Proxy"
         echo -e "    ${GREEN}6.${NC} 🌐 Lantern Unbounded Proxy"
-        echo -e "    ${GREEN}7.${NC} 🔒 How Tor Circuits Work"
-        echo -e "    ${GREEN}8.${NC} 📊 Understanding Your Dashboard"
-        echo -e "    ${GREEN}9.${NC} ⚖  Legal & Safety Considerations"
-        echo -e "   ${GREEN}10.${NC} 📖 About Torware"
+        echo -e "    ${GREEN}7.${NC} 📱 MTProxy (Telegram Proxy)"
+        echo -e "    ${GREEN}8.${NC} 🔒 How Tor Circuits Work"
+        echo -e "    ${GREEN}9.${NC} 📊 Understanding Your Dashboard"
+        echo -e "   ${GREEN}10.${NC} ⚖  Legal & Safety Considerations"
+        echo -e "   ${GREEN}11.${NC} 📖 About Torware"
         echo -e "    ${GREEN}0.${NC} ← Back"
         echo ""
-        read -p "  Choose a topic [0-10]: " _topic < /dev/tty || { _back=true; continue; }
+        read -p "  Choose a topic [0-11]: " _topic < /dev/tty || { _back=true; continue; }
 
         echo ""
         case "$_topic" in
@@ -6649,6 +7919,50 @@ show_about() {
                 echo -e "  ${BOLD}Learn more:${NC} ${CYAN}https://unbounded.lantern.io${NC}"
                 ;;
             7)
+                echo -e "${CYAN}═══ MTProxy (Telegram Proxy) ═══${NC}"
+                echo ""
+                echo -e "  MTProxy is an official proxy protocol for Telegram, designed to"
+                echo -e "  help users in censored countries access the messaging app."
+                echo -e "  Torware uses ${BOLD}mtg${NC}, a modern Go implementation with ${BOLD}FakeTLS${NC}."
+                echo ""
+                echo -e "  ${BOLD}How MTProxy works:${NC}"
+                echo -e "  1. You run an MTProxy server with a unique ${CYAN}secret key${NC}"
+                echo -e "  2. Users connect using a ${CYAN}tg://proxy${NC} link or QR code"
+                echo -e "  3. Traffic is encrypted and proxied through your server"
+                echo -e "  4. Telegram servers receive the connection from your IP"
+                echo ""
+                echo -e "  ${BOLD}FakeTLS (Traffic Obfuscation):${NC}"
+                echo -e "  FakeTLS makes your proxy traffic look like normal HTTPS traffic"
+                echo -e "  to a legitimate website (like cloudflare.com). When censors"
+                echo -e "  inspect the connection, they see what appears to be standard"
+                echo -e "  TLS handshakes to a popular CDN. This makes it much harder to"
+                echo -e "  detect and block."
+                echo ""
+                echo -e "  ${BOLD}The 'ee' secret prefix:${NC}"
+                echo -e "  MTProxy secrets starting with ${CYAN}ee${NC} indicate FakeTLS mode."
+                echo -e "  The domain (e.g., cloudflare.com) is encoded in the secret."
+                echo -e "  Older 'dd' secrets are deprecated and easier to detect."
+                echo ""
+                echo -e "  ${BOLD}Sharing your proxy:${NC}"
+                echo -e "  • ${CYAN}tg://proxy?...${NC} — Deep link opens directly in Telegram app"
+                echo -e "  • ${CYAN}https://t.me/proxy?...${NC} — Web link works in any browser"
+                echo -e "  • ${CYAN}QR code${NC} — Users can scan with Telegram's camera feature"
+                echo ""
+                echo -e "  ${BOLD}Security features:${NC}"
+                echo -e "  • ${GREEN}Concurrency limit${NC} — Caps max simultaneous connections"
+                echo -e "  • ${GREEN}Geo-blocking${NC} — Block connections from specific countries"
+                echo -e "  • ${GREEN}Anti-replay${NC} — Prevents replay attacks (built-in)"
+                echo ""
+                echo -e "  ${BOLD}You are NOT an exit point.${NC} Your proxy forwards traffic to"
+                echo -e "  Telegram's servers. Users' actual messages are end-to-end"
+                echo -e "  encrypted by Telegram — you cannot read them."
+                echo ""
+                echo -e "  ${BOLD}Resource usage:${NC} Very lightweight (0.5 CPU, 128MB RAM)."
+                echo -e "  Can run safely alongside any relay type and other proxies."
+                echo ""
+                echo -e "  ${BOLD}Docker image:${NC} ${DIM}nineseconds/mtg:2${NC}"
+                ;;
+            8)
                 echo -e "${CYAN}═══ How Tor Circuits Work ═══${NC}"
                 echo ""
                 echo -e "  A Tor circuit is a path through 3 relays:"
@@ -6676,7 +7990,7 @@ show_about() {
                 echo ""
                 echo -e "  Circuits are rebuilt every ~10 minutes for extra security."
                 ;;
-            8)
+            9)
                 echo -e "${CYAN}═══ Understanding Your Dashboard ═══${NC}"
                 echo ""
                 echo -e "  ${BOLD}Circuits:${NC}"
@@ -6728,7 +8042,7 @@ show_about() {
                 echo -e "  • After 24 hours: steady circuits, growing country list"
                 echo -e "  • After days/weeks: stable traffic as BridgeDB distributes you"
                 ;;
-            9)
+            10)
                 echo -e "${CYAN}═══ Legal & Safety Considerations ═══${NC}"
                 echo ""
                 echo -e "  ${BOLD}Bridges (safest):${NC}"
@@ -6765,7 +8079,7 @@ show_about() {
                 echo -e "  • Set a contact email so Tor directory authorities can reach you"
                 echo -e "  • Keep your relay updated (Torware handles Docker image updates)"
                 ;;
-            10)
+            11)
                 echo -e "${CYAN}═══ About Torware ═══${NC}"
                 echo ""
                 echo -e "  ${BOLD}Torware v${VERSION}${NC}"
@@ -6777,6 +8091,7 @@ show_about() {
                 echo -e "  • Mixed types — Different relay types per container"
                 echo -e "  • Snowflake — Run a WebRTC proxy alongside your relay"
                 echo -e "  • Unbounded — Help Lantern network with WebRTC proxy"
+                echo -e "  • MTProxy — Telegram proxy with FakeTLS obfuscation"
                 echo -e "  • Live dashboard — Real-time stats from Tor's ControlPort"
                 echo -e "  • Country tracking — See where your traffic goes"
                 echo -e "  • Telegram alerts — Get notified about your relay"
@@ -6858,6 +8173,14 @@ show_menu() {
         else
             echo -e "    ${GREEN}u.${NC} 🌐 Enable Unbounded Proxy (Lantern)"
         fi
+        # Show MTProxy status
+        if [ "$MTPROXY_ENABLED" = "true" ]; then
+            local _mtp_label="${GREEN}Running${NC}"
+            is_mtproxy_running || _mtp_label="${RED}Stopped${NC}"
+            echo -e "    ${GREEN}m.${NC} 📱 MTProxy (Telegram) [${_mtp_label}]"
+        else
+            echo -e "    ${GREEN}m.${NC} 📱 Enable MTProxy (Telegram)"
+        fi
         echo -e "    ${GREEN}t.${NC} 💬 Telegram Notifications"
         echo -e "    ${GREEN}a.${NC} 📖 About & Learn"
         echo -e "    ${GREEN}0.${NC} 🚪 Exit"
@@ -6887,6 +8210,9 @@ show_menu() {
                 if [ "$UNBOUNDED_ENABLED" = "true" ]; then
                     start_unbounded_container
                 fi
+                if [ "$MTPROXY_ENABLED" = "true" ]; then
+                    start_mtproxy_container
+                fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
             6)
@@ -6894,6 +8220,7 @@ show_menu() {
                 if [ "$RELAY_TYPE" = "none" ]; then
                     stop_snowflake_container
                     stop_unbounded_container
+                    stop_mtproxy_container
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
@@ -6904,6 +8231,9 @@ show_menu() {
                 fi
                 if [ "$UNBOUNDED_ENABLED" = "true" ]; then
                     restart_unbounded_container
+                fi
+                if [ "$MTPROXY_ENABLED" = "true" ]; then
+                    restart_mtproxy_container
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
@@ -7169,6 +8499,298 @@ show_menu() {
                         [[ "$_ub_mem" =~ ^[0-9]+[mMgG]$ ]] && UNBOUNDED_MEMORY="$(echo "$_ub_mem" | tr '[:upper:]' '[:lower:]')" || UNBOUNDED_MEMORY="$_def_mem"
                         save_settings
                         run_unbounded_container
+                    fi
+                fi
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                ;;
+            m|M)
+                if [ "$MTPROXY_ENABLED" = "true" ]; then
+                    echo ""
+                    echo -e "${CYAN}═══ MTProxy (Telegram) ═══${NC}"
+                    echo ""
+                    local _mtpn="$MTPROXY_CONTAINER"
+                    local _mtps="${RED}Stopped${NC}"
+                    is_mtproxy_running && _mtps="${GREEN}Running${NC}"
+                    local _mtp_stats=$(get_mtproxy_stats 2>/dev/null)
+                    local _mtp_in=$(echo "$_mtp_stats" | awk '{print $1}')
+                    local _mtp_out=$(echo "$_mtp_stats" | awk '{print $2}')
+                    echo -e "  Status:      [${_mtps}]"
+                    echo -e "  Traffic:     ↓ ${CYAN}$(format_bytes ${_mtp_in:-0})${NC}  ↑ ${CYAN}$(format_bytes ${_mtp_out:-0})${NC}"
+                    echo -e "  Port:        ${CYAN}${MTPROXY_PORT}${NC}"
+                    echo -e "  FakeTLS:     ${CYAN}${MTPROXY_DOMAIN}${NC}"
+                    echo -e "  Max Conns:   ${CYAN}${MTPROXY_CONCURRENCY:-8192}${NC}"
+                    if [ -n "$MTPROXY_BLOCKLIST_COUNTRIES" ]; then
+                        echo -e "  Geo-Block:   ${YELLOW}${MTPROXY_BLOCKLIST_COUNTRIES}${NC}"
+                    else
+                        echo -e "  Geo-Block:   ${DIM}None${NC}"
+                    fi
+                    echo -e "  CPU/RAM:     ${CYAN}${MTPROXY_CPUS:-0.5}${NC} / ${CYAN}${MTPROXY_MEMORY:-128m}${NC}"
+                    echo ""
+                    echo -e "    1. Show proxy link & QR code"
+                    echo -e "    2. Restart MTProxy"
+                    echo -e "    3. Stop MTProxy"
+                    echo -e "    4. Disable MTProxy"
+                    echo -e "    5. Change settings (port/domain/resources)"
+                    echo -e "    6. Regenerate secret"
+                    echo -e "    7. Security settings (connection limit, geo-block)"
+                    echo -e "    ${RED}8. Remove MTProxy (stop, remove container & image)${NC}"
+                    if [ "$TELEGRAM_ENABLED" = "true" ]; then
+                        echo -e "    9. 📱 Send link via Telegram"
+                    fi
+                    echo -e "    0. Back"
+                    read -p "  choice: " mtp_choice < /dev/tty || true
+                    case "${mtp_choice:-0}" in
+                        1)
+                            echo ""
+                            show_mtproxy_qr
+                            echo ""
+                            echo -e "  ${BOLD}tg:// link (for sharing):${NC}"
+                            echo -e "  ${CYAN}$(get_mtproxy_link)${NC}"
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            echo ""
+                            ;;
+                        2) restart_mtproxy_container ;;
+                        3)
+                            stop_mtproxy_container
+                            log_warn "MTProxy stopped but still enabled. It will restart on next 'torware start'. Use option 4 to disable permanently."
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            echo ""
+                            ;;
+                        4)
+                            MTPROXY_ENABLED="false"
+                            stop_mtproxy_container
+                            save_settings
+                            log_success "MTProxy disabled"
+                            ;;
+                        5)
+                            echo ""
+                            echo -e "  ${BOLD}MTProxy Settings${NC}"
+                            echo ""
+                            local _mtp_old_port="$MTPROXY_PORT"
+                            echo -e "  ${DIM}Note: MTProxy uses host networking. Choose an available port.${NC}"
+                            echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
+                            read -p "    Port [${MTPROXY_PORT}]: " _mtp_port < /dev/tty || true
+                            if [ -n "$_mtp_port" ]; then
+                                if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
+                                    # Check if port is available
+                                    if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
+                                        log_warn "Port ${_mtp_port} is already in use. Please choose another port."
+                                    else
+                                        MTPROXY_PORT="$_mtp_port"
+                                    fi
+                                else
+                                    log_warn "Invalid port"
+                                fi
+                            fi
+                            echo ""
+                            echo -e "  ${DIM}FakeTLS domain (traffic disguised as HTTPS to this domain):${NC}"
+                            echo -e "  ${DIM}  1. cloudflare.com${NC}"
+                            echo -e "  ${DIM}  2. google.com${NC}"
+                            echo -e "  ${DIM}  3. Keep current (${MTPROXY_DOMAIN})${NC}"
+                            echo -e "  ${DIM}  4. Custom domain${NC}"
+                            read -p "    Domain choice [3]: " _mtp_dom < /dev/tty || true
+                            case "${_mtp_dom:-3}" in
+                                1) MTPROXY_DOMAIN="cloudflare.com"; MTPROXY_SECRET="" ;;
+                                2) MTPROXY_DOMAIN="google.com"; MTPROXY_SECRET="" ;;
+                                4)
+                                    read -p "    Enter domain: " _mtp_cdom < /dev/tty || true
+                                    if [ -n "$_mtp_cdom" ]; then
+                                        MTPROXY_DOMAIN="$_mtp_cdom"
+                                        MTPROXY_SECRET=""
+                                    fi
+                                    ;;
+                            esac
+                            echo ""
+                            read -p "    CPU cores [${MTPROXY_CPUS:-0.5}]: " _mtp_cpu < /dev/tty || true
+                            read -p "    RAM limit [${MTPROXY_MEMORY:-128m}]: " _mtp_mem < /dev/tty || true
+                            if [ -n "$_mtp_cpu" ]; then
+                                [[ "$_mtp_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] && MTPROXY_CPUS="$_mtp_cpu" || log_warn "Invalid CPU"
+                            fi
+                            if [ -n "$_mtp_mem" ]; then
+                                [[ "$_mtp_mem" =~ ^[0-9]+[mMgG]$ ]] && MTPROXY_MEMORY="$(echo "$_mtp_mem" | tr '[:upper:]' '[:lower:]')" || log_warn "Invalid RAM"
+                            fi
+                            save_settings
+                            log_success "MTProxy settings updated"
+                            # Warn if port changed - URL will be different
+                            if [ "$MTPROXY_PORT" != "$_mtp_old_port" ]; then
+                                echo ""
+                                log_warn "Port changed from ${_mtp_old_port} to ${MTPROXY_PORT}"
+                                log_warn "The proxy URL has changed! Old links will no longer work."
+                                echo -e "  ${DIM}Users will need the new link to connect.${NC}"
+                            fi
+                            echo ""
+                            read -p "  Restart MTProxy to apply? [Y/n] " _mtp_rs < /dev/tty || true
+                            if [[ ! "$_mtp_rs" =~ ^[Nn]$ ]]; then
+                                restart_mtproxy_container
+                                # If port changed and Telegram enabled, offer to send new link
+                                if [ "$MTPROXY_PORT" != "$_mtp_old_port" ] && [ "$TELEGRAM_ENABLED" = "true" ]; then
+                                    echo ""
+                                    read -p "  Send new proxy link to Telegram? [Y/n] " _mtp_tg < /dev/tty || true
+                                    if [[ ! "$_mtp_tg" =~ ^[Nn]$ ]]; then
+                                        telegram_notify_mtproxy_started
+                                        log_success "New proxy link sent to Telegram"
+                                    fi
+                                fi
+                            fi
+                            ;;
+                        6)
+                            echo ""
+                            read -p "  Regenerate secret? Old links will stop working. [y/N] " _mtp_regen < /dev/tty || true
+                            if [[ "$_mtp_regen" =~ ^[Yy]$ ]]; then
+                                MTPROXY_SECRET=""
+                                save_settings
+                                restart_mtproxy_container
+                                log_success "New secret generated"
+                                # Offer to send new link via Telegram
+                                if [ "$TELEGRAM_ENABLED" = "true" ]; then
+                                    echo ""
+                                    read -p "  Send new proxy link to Telegram? [Y/n] " _mtp_tg < /dev/tty || true
+                                    if [[ ! "$_mtp_tg" =~ ^[Nn]$ ]]; then
+                                        telegram_notify_mtproxy_started
+                                        log_success "New proxy link sent to Telegram"
+                                    fi
+                                fi
+                            fi
+                            ;;
+                        7)
+                            echo ""
+                            echo -e "  ${BOLD}Security Settings${NC}"
+                            echo ""
+                            echo -e "  ${DIM}Max concurrent connections (default: 8192):${NC}"
+                            read -p "    Max connections [${MTPROXY_CONCURRENCY:-8192}]: " _mtp_conc < /dev/tty || true
+                            if [ -n "$_mtp_conc" ]; then
+                                [[ "$_mtp_conc" =~ ^[0-9]+$ ]] && MTPROXY_CONCURRENCY="$_mtp_conc" || log_warn "Invalid number"
+                            fi
+                            echo ""
+                            echo -e "  ${BOLD}Geo-blocking (block connections from specific countries)${NC}"
+                            echo -e "  ${DIM}Block countries that don't need censorship circumvention${NC}"
+                            echo -e "  ${DIM}(reduces abuse from data centers in open-internet regions)${NC}"
+                            echo ""
+                            if [ -n "$MTPROXY_BLOCKLIST_COUNTRIES" ]; then
+                                echo -e "  Current blocklist: ${YELLOW}$MTPROXY_BLOCKLIST_COUNTRIES${NC}"
+                            else
+                                echo -e "  Current blocklist: ${GREEN}None (all allowed)${NC}"
+                            fi
+                            echo ""
+                            echo -e "  ${DIM}Available countries to block:${NC}"
+                            echo -e "    ${GREEN}1.${NC} US - United States"
+                            echo -e "    ${GREEN}2.${NC} DE - Germany"
+                            echo -e "    ${GREEN}3.${NC} NL - Netherlands"
+                            echo -e "    ${GREEN}4.${NC} FR - France"
+                            echo -e "    ${GREEN}5.${NC} GB - United Kingdom"
+                            echo -e "    ${GREEN}6.${NC} SG - Singapore"
+                            echo -e "    ${GREEN}7.${NC} JP - Japan"
+                            echo -e "    ${GREEN}8.${NC} CA - Canada"
+                            echo -e "    ${GREEN}9.${NC} AU - Australia"
+                            echo -e "   ${GREEN}10.${NC} KR - South Korea"
+                            echo -e "   ${GREEN}11.${NC} CN - China"
+                            echo -e "   ${GREEN}12.${NC} RU - Russia"
+                            echo ""
+                            echo -e "  ${DIM}Enter numbers separated by commas (e.g., 1,2,3) or 'clear' to disable${NC}"
+                            read -p "    Select countries to block: " _mtp_block_sel < /dev/tty || true
+                            if [ -n "$_mtp_block_sel" ]; then
+                                if [ "$_mtp_block_sel" = "clear" ] || [ "$_mtp_block_sel" = "none" ] || [ "$_mtp_block_sel" = "0" ]; then
+                                    MTPROXY_BLOCKLIST_COUNTRIES=""
+                                    log_info "Geo-blocking disabled"
+                                else
+                                    # Map numbers to country codes
+                                    local _geo_codes=""
+                                    local _geo_map=("" "US" "DE" "NL" "FR" "GB" "SG" "JP" "CA" "AU" "KR" "CN" "RU")
+                                    for _num in $(echo "$_mtp_block_sel" | tr ',' ' '); do
+                                        if [[ "$_num" =~ ^[0-9]+$ ]] && [ "$_num" -ge 1 ] && [ "$_num" -le 12 ]; then
+                                            [ -n "$_geo_codes" ] && _geo_codes+=","
+                                            _geo_codes+="${_geo_map[$_num]}"
+                                        fi
+                                    done
+                                    if [ -n "$_geo_codes" ]; then
+                                        MTPROXY_BLOCKLIST_COUNTRIES="$_geo_codes"
+                                        log_info "Will block: $_geo_codes"
+                                    fi
+                                fi
+                            fi
+                            save_settings
+                            log_success "Security settings updated"
+                            echo ""
+                            read -p "  Restart MTProxy to apply? [Y/n] " _mtp_sec_rs < /dev/tty || true
+                            if [[ ! "$_mtp_sec_rs" =~ ^[Nn]$ ]]; then
+                                restart_mtproxy_container
+                            fi
+                            ;;
+                        8)
+                            echo ""
+                            read -p "  Are you sure? This will remove the container and image. [y/N] " _mtp_rm < /dev/tty || true
+                            if [[ "$_mtp_rm" =~ ^[Yy]$ ]]; then
+                                MTPROXY_ENABLED="false"
+                                stop_mtproxy_container
+                                docker rm -f "$MTPROXY_CONTAINER" 2>/dev/null || true
+                                docker rmi "$MTPROXY_IMAGE" 2>/dev/null || true
+                                rm -rf "$INSTALL_DIR/mtproxy" 2>/dev/null || true
+                                MTPROXY_SECRET=""
+                                save_settings
+                                log_success "MTProxy fully removed"
+                            else
+                                log_info "Cancelled"
+                            fi
+                            ;;
+                        9)
+                            echo ""
+                            if [ "$TELEGRAM_ENABLED" != "true" ]; then
+                                log_warn "Telegram bot is not enabled."
+                                echo -e "  ${DIM}Enable Telegram notifications first from the main menu.${NC}"
+                            elif ! is_mtproxy_running; then
+                                log_warn "MTProxy is not running. Start it first."
+                            else
+                                echo -ne "  Sending link & QR to Telegram... "
+                                if telegram_notify_mtproxy_started; then
+                                    echo -e "${GREEN}✓ Sent!${NC}"
+                                else
+                                    echo -e "${RED}✗ Failed${NC}"
+                                fi
+                            fi
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            ;;
+                    esac
+                else
+                    echo ""
+                    echo -e "  ${BOLD}📱 MTProxy (Telegram Proxy)${NC}"
+                    echo ""
+                    echo -e "  Run a proxy that helps censored users access Telegram."
+                    echo -e "  Uses FakeTLS to disguise traffic as normal HTTPS."
+                    echo -e "  Very lightweight (~50MB RAM). Share link/QR with users."
+                    echo ""
+                    read -p "  Enable MTProxy? [y/N] " mtp_en < /dev/tty || true
+                    if [[ "$mtp_en" =~ ^[Yy]$ ]]; then
+                        MTPROXY_ENABLED="true"
+                        echo ""
+                        echo -e "  ${DIM}FakeTLS domain (traffic disguised as HTTPS to this domain):${NC}"
+                        echo -e "  ${DIM}  1. cloudflare.com (recommended)${NC}"
+                        echo -e "  ${DIM}  2. google.com${NC}"
+                        echo -e "  ${DIM}  3. Custom domain${NC}"
+                        read -p "  Domain choice [1]: " _mtp_dom < /dev/tty || true
+                        case "${_mtp_dom:-1}" in
+                            2) MTPROXY_DOMAIN="google.com" ;;
+                            3)
+                                read -p "  Enter domain: " _mtp_cdom < /dev/tty || true
+                                MTPROXY_DOMAIN="${_mtp_cdom:-cloudflare.com}"
+                                ;;
+                            *) MTPROXY_DOMAIN="cloudflare.com" ;;
+                        esac
+                        echo ""
+                        echo -e "  ${DIM}MTProxy uses host networking. Choose an available port.${NC}"
+                        echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
+                        read -p "  Port [8443]: " _mtp_port < /dev/tty || true
+                        _mtp_port="${_mtp_port:-8443}"
+                        if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
+                            if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
+                                log_warn "Port ${_mtp_port} appears to be in use. Trying anyway..."
+                            fi
+                            MTPROXY_PORT="$_mtp_port"
+                        else
+                            MTPROXY_PORT=8443
+                        fi
+                        MTPROXY_SECRET=""
+                        save_settings
+                        run_mtproxy_container
                     fi
                 fi
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
@@ -7633,6 +9255,9 @@ print_summary() {
     if [ "$UNBOUNDED_ENABLED" = "true" ]; then
     echo -e "${GREEN}║    torware unbounded    - Unbounded (Lantern) proxy status       ║${NC}"
     fi
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+    echo -e "${GREEN}║    torware mtproxy      - MTProxy (Telegram) proxy status        ║${NC}"
+    fi
     echo -e "${GREEN}║    torware logs         - Stream container logs                  ║${NC}"
     echo -e "${GREEN}║    torware --help       - Full command reference                 ║${NC}"
     echo -e "${GREEN}║                                                                   ║${NC}"
@@ -7661,6 +9286,9 @@ print_summary() {
     if [ "$UNBOUNDED_ENABLED" = "true" ]; then
         echo -e "    Unbounded: Uses ${GREEN}--network host${NC} — no port forwarding needed (WebRTC auto-traversal)"
     fi
+    if [ "$MTPROXY_ENABLED" = "true" ]; then
+        echo -e "    MTProxy: Port ${GREEN}${MTPROXY_PORT}/tcp${NC}"
+    fi
     echo ""
 }
 
@@ -7676,18 +9304,21 @@ cli_main() {
             start_relay
             [ "$SNOWFLAKE_ENABLED" = "true" ] && start_snowflake_container
             [ "$UNBOUNDED_ENABLED" = "true" ] && start_unbounded_container
+            [ "$MTPROXY_ENABLED" = "true" ] && start_mtproxy_container
             ;;
         stop)
             stop_relay
             if [ "$RELAY_TYPE" = "none" ]; then
                 stop_snowflake_container
                 stop_unbounded_container
+                stop_mtproxy_container
             fi
             ;;
         restart)
             restart_relay
             [ "$SNOWFLAKE_ENABLED" = "true" ] && restart_snowflake_container
             [ "$UNBOUNDED_ENABLED" = "true" ] && restart_unbounded_container
+            [ "$MTPROXY_ENABLED" = "true" ] && restart_mtproxy_container
             ;;
         status)
             show_status
@@ -7709,6 +9340,12 @@ cli_main() {
             ;;
         health)
             health_check
+            ;;
+        doctor)
+            run_doctor
+            ;;
+        graphs|graph|bandwidth)
+            show_bandwidth_graphs
             ;;
         fingerprint)
             show_fingerprint
@@ -7755,6 +9392,28 @@ cli_main() {
                 echo -e "  Enable via 'torware menu' > Unbounded option"
             fi
             ;;
+        mtproxy)
+            if [ "$MTPROXY_ENABLED" = "true" ]; then
+                echo -e "  MTProxy (Telegram): ${GREEN}enabled${NC}"
+                if is_mtproxy_running; then
+                    echo -e "  Status: ${GREEN}running${NC}"
+                    local mtp_s=$(get_mtproxy_stats 2>/dev/null)
+                    local mtp_in=$(echo "$mtp_s" | awk '{print $1}')
+                    local mtp_out=$(echo "$mtp_s" | awk '{print $2}')
+                    echo -e "  Traffic: ↓ $(format_bytes ${mtp_in:-0})  ↑ $(format_bytes ${mtp_out:-0})"
+                    echo -e "  Port: ${MTPROXY_PORT}  |  Domain: ${MTPROXY_DOMAIN}"
+                    echo ""
+                    echo -e "  Proxy link:"
+                    get_mtproxy_link_https
+                else
+                    echo -e "  Status: ${RED}stopped${NC}"
+                    echo -e "  Run 'torware start' to start all containers"
+                fi
+            else
+                echo -e "  MTProxy (Telegram): ${DIM}disabled${NC}"
+                echo -e "  Enable via 'torware menu' > MTProxy option"
+            fi
+            ;;
         version|--version|-v)
             show_version
             ;;
@@ -7796,7 +9455,7 @@ main() {
     # Dispatch CLI commands if any non-flag args remain
     if [ ${#_args[@]} -gt 0 ]; then
         case "${_args[0]}" in
-            start|stop|restart|status|dashboard|dash|stats|peers|menu|logs|health|fingerprint|bridge-line|bridgeline|backup|restore|snowflake|version|--version|-v|uninstall|help)
+            start|stop|restart|status|dashboard|dash|stats|peers|menu|logs|health|fingerprint|bridge-line|bridgeline|backup|restore|snowflake|unbounded|mtproxy|version|--version|-v|uninstall|help)
                 cli_main "${_args[@]}"
                 exit $?
                 ;;
