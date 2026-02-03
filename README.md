@@ -160,7 +160,7 @@ Snowflake does **not** need port forwarding — WebRTC handles NAT traversal aut
 |------------|-------|
 | Bridge (obfs4) | `thetorproject/obfs4-bridge:0.24` |
 | Middle/Exit Relay | `osminogin/tor-simple:0.4.8.10` |
-| Snowflake Proxy | `thetorproject/snowflake-proxy:0.20` |
+| Snowflake Proxy | `thetorproject/snowflake-proxy:latest` |
 | Unbounded Proxy | `torware/unbounded-widget:latest` (built from source) |
 | MTProxy (Telegram) | `nineseconds/mtg:2.1.7` |
 

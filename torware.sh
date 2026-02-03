@@ -56,7 +56,7 @@ VERSION="1.1"
 # Docker image tags — pinned to specific versions for reproducibility. Use :latest for auto-updates.
 BRIDGE_IMAGE="thetorproject/obfs4-bridge:0.24"
 RELAY_IMAGE="osminogin/tor-simple:0.4.8.10"
-SNOWFLAKE_IMAGE="thetorproject/snowflake-proxy:0.20"
+SNOWFLAKE_IMAGE="thetorproject/snowflake-proxy:latest"
 INSTALL_DIR="${INSTALL_DIR:-/opt/torware}"
 
 # Validate INSTALL_DIR is absolute
