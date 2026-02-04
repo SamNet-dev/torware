@@ -8110,7 +8110,7 @@ show_about() {
                 echo -e "  protocol (port 9051+) using cookie authentication."
                 echo ""
                 echo -e "  ${BOLD}Open source:${NC}"
-                echo -e "  ${CYAN}https://github.com/ssmirr/torware${NC}"
+                echo -e "  ${CYAN}https://github.com/SamNet-dev/torware${NC}"
                 ;;
             0)
                 _back=true
