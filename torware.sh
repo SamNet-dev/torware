@@ -2323,6 +2323,10 @@ EOF
 
 load_settings() {
     if [ -f "$INSTALL_DIR/settings.conf" ]; then
+        # Migration: Update old Freddie URL to new one (Lantern moved from Heroku)
+        if grep -q 'bf-freddie\.herokuapp\.com' "$INSTALL_DIR/settings.conf" 2>/dev/null; then
+            sed -i 's|bf-freddie\.herokuapp\.com|freddie.iantem.io|g' "$INSTALL_DIR/settings.conf" 2>/dev/null
+        fi
         # Copy to temp file to avoid TOCTOU race between validation and parse
         local _tmp_settings
         _tmp_settings=$(mktemp "${TMPDIR:-/tmp}/.tor_settings.XXXXXX") || return 1
