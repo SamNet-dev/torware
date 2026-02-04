@@ -102,7 +102,7 @@ UNBOUNDED_VOLUME="unbounded-data"
 UNBOUNDED_IMAGE="torware/unbounded-widget:latest"
 UNBOUNDED_CPUS="0.5"
 UNBOUNDED_MEMORY="256m"
-UNBOUNDED_FREDDIE="https://bf-freddie.herokuapp.com"
+UNBOUNDED_FREDDIE="https://freddie.iantem.io"
 UNBOUNDED_EGRESS="wss://unbounded.iantem.io"
 UNBOUNDED_TAG=""
 
@@ -2116,7 +2116,7 @@ save_settings() {
     local _caller_unbounded_enabled="${UNBOUNDED_ENABLED:-false}"
     local _caller_unbounded_cpus="${UNBOUNDED_CPUS:-0.5}"
     local _caller_unbounded_memory="${UNBOUNDED_MEMORY:-256m}"
-    local _caller_unbounded_freddie="${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}"
+    local _caller_unbounded_freddie="${UNBOUNDED_FREDDIE:-https://freddie.iantem.io}"
     local _caller_unbounded_egress="${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}"
     local _caller_unbounded_tag="${UNBOUNDED_TAG:-}"
 
@@ -2251,7 +2251,7 @@ SNOWFLAKE_MEMORY_2='${SNOWFLAKE_MEMORY_2}'
 UNBOUNDED_ENABLED='${UNBOUNDED_ENABLED:-false}'
 UNBOUNDED_CPUS='${UNBOUNDED_CPUS:-0.5}'
 UNBOUNDED_MEMORY='${UNBOUNDED_MEMORY:-256m}'
-UNBOUNDED_FREDDIE='${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}'
+UNBOUNDED_FREDDIE='${UNBOUNDED_FREDDIE:-https://freddie.iantem.io}'
 UNBOUNDED_EGRESS='${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}'
 UNBOUNDED_TAG='${UNBOUNDED_TAG}'
 
@@ -2938,7 +2938,7 @@ run_unbounded_container() {
         --health-timeout=10s \
         --health-retries=5 \
         --health-start-period=60s \
-        -e "FREDDIE=${UNBOUNDED_FREDDIE:-https://bf-freddie.herokuapp.com}" \
+        -e "FREDDIE=${UNBOUNDED_FREDDIE:-https://freddie.iantem.io}" \
         -e "EGRESS=${UNBOUNDED_EGRESS:-wss://unbounded.iantem.io}" \
         -e "TAG=${ub_tag}" \
         -v "${vname}:/var/lib/unbounded" \
@@ -9199,16 +9199,27 @@ show_settings_menu() {
 create_management_script() {
     log_info "Creating management script..."
 
-    # Copy the entire script as the management tool
-    if [ -f "$0" ] && [ -r "$0" ]; then
-        if ! cp "$0" "$INSTALL_DIR/torware"; then
-            log_error "Failed to copy management script"
+    local script_url="https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh"
+    local source_file="$0"
+    local dest_file="$INSTALL_DIR/torware"
+
+    # Resolve symlinks to check if source and dest are the same file
+    local resolved_source resolved_dest
+    resolved_source=$(readlink -f "$source_file" 2>/dev/null || echo "$source_file")
+    resolved_dest=$(readlink -f "$dest_file" 2>/dev/null || echo "$dest_file")
+
+    # If source and dest are the same file, or running from pipe/stdin, download from GitHub
+    if [ "$resolved_source" = "$resolved_dest" ] || [ ! -f "$source_file" ] || [ ! -r "$source_file" ]; then
+        log_info "Downloading latest version from GitHub..."
+        if ! curl -sL "$script_url" -o "$dest_file" 2>/dev/null; then
+            log_error "Could not download management script."
+            return 1
         fi
     else
-        # Running from pipe - try to download
-        local script_url="https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh"
-        if ! curl -sL "$script_url" -o "$INSTALL_DIR/torware" 2>/dev/null; then
-            log_error "Could not download management script. Run installer again from file (not pipe) to fix."
+        # Copy from local file (fresh install from downloaded script)
+        if ! cp "$source_file" "$dest_file"; then
+            log_error "Failed to copy management script"
+            return 1
         fi
     fi
 
