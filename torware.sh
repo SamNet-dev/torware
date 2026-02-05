@@ -3241,19 +3241,23 @@ get_mtproxy_stats() {
 
     local metrics_port="${MTPROXY_METRICS_PORT:-3129}"
 
-    # Try prometheus metrics first (reliable with host networking)
+    # mtg serves prometheus metrics at "/" by default (not "/metrics")
     local metrics
-    metrics=$(curl -s --max-time 2 "http://127.0.0.1:${metrics_port}/metrics" 2>/dev/null)
+    metrics=$(curl -s --max-time 2 "http://127.0.0.1:${metrics_port}/" 2>/dev/null)
 
     if [ -n "$metrics" ]; then
-        # Parse Prometheus metrics
+        # Parse Prometheus metrics - mtg uses prefix "mtg_" by default:
+        # - mtg_domain_fronting_traffic{direction="ingress"} = bytes from clients
+        # - mtg_domain_fronting_traffic{direction="egress"} = bytes to clients
+        # - mtg_telegram_traffic{direction="ingress/egress"} = bytes to/from Telegram
         local traffic_in traffic_out
-        traffic_in=$(echo "$metrics" | awk '/^mtg_traffic_bytes\{.*direction="from_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-        traffic_out=$(echo "$metrics" | awk '/^mtg_traffic_bytes\{.*direction="to_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-        # If no traffic metrics yet, try alternate metric names
+        # Client traffic (domain fronting) - best measure of user traffic
+        traffic_in=$(echo "$metrics" | awk '/^mtg_domain_fronting_traffic\{.*direction="ingress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        traffic_out=$(echo "$metrics" | awk '/^mtg_domain_fronting_traffic\{.*direction="egress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        # If no domain_fronting metrics, try telegram_traffic
         if [ -z "$traffic_in" ] || [ "$traffic_in" = "0" ]; then
-            traffic_in=$(echo "$metrics" | awk '/^mtg_client_bytes_received/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-            traffic_out=$(echo "$metrics" | awk '/^mtg_client_bytes_sent/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+            traffic_in=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="egress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+            traffic_out=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="ingress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
         fi
         echo "${traffic_in:-0} ${traffic_out:-0}"
         return
@@ -4246,7 +4250,7 @@ health_check() {
         fi
 
         echo -n "  Metrics endpoint:     "
-        if curl -s --max-time 3 "http://127.0.0.1:${_mtpm}/metrics" &>/dev/null; then
+        if curl -s --max-time 3 "http://127.0.0.1:${_mtpm}/" &>/dev/null; then
             echo -e "${GREEN}OK (port $_mtpm)${NC}"
         else
             echo -e "${YELLOW}NOT ACCESSIBLE${NC}"
