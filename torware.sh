@@ -3099,7 +3099,16 @@ run_mtproxy_container() {
     local concurrency="${MTPROXY_CONCURRENCY:-8192}"
     local blocklist_countries="${MTPROXY_BLOCKLIST_COUNTRIES:-}"
 
-    # Generate secret if not set
+    # Pull image if not present (needed for secret generation)
+    if ! docker image inspect "$MTPROXY_IMAGE" &>/dev/null; then
+        log_info "Pulling MTProxy image..."
+        if ! docker pull "$MTPROXY_IMAGE"; then
+            log_error "Failed to pull MTProxy image"
+            return 1
+        fi
+    fi
+
+    # Generate secret if not set (requires image to be present)
     if [ -z "$secret" ]; then
         log_info "Generating MTProxy secret..."
         secret=$(generate_mtproxy_secret)
@@ -3109,15 +3118,6 @@ run_mtproxy_container() {
         fi
         MTPROXY_SECRET="$secret"
         save_settings
-    fi
-
-    # Pull image if not present
-    if ! docker image inspect "$MTPROXY_IMAGE" &>/dev/null; then
-        log_info "Pulling MTProxy image..."
-        if ! docker pull "$MTPROXY_IMAGE"; then
-            log_error "Failed to pull MTProxy image"
-            return 1
-        fi
     fi
 
     # Create config directory
