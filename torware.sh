@@ -2079,6 +2079,9 @@ prompt_relay_settings() {
         local _sys_ram=$(get_ram_mb)
         local _per_cpu=$(awk -v c="$_sys_cores" -v n="$CONTAINER_COUNT" 'BEGIN {v=(c>1)?(c-1)/n:0.5; if(v<0.5)v=0.5; printf "%.1f",v}')
         local _per_ram=$(awk -v r="$_sys_ram" -v n="$CONTAINER_COUNT" 'BEGIN {v=(r-512)/n; if(v<256)v=256; if(v>2048)v=2048; printf "%.0f",v}')
+        # Validate values (some awk implementations return "inf" on edge cases)
+        [[ "$_per_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] || _per_cpu="0.5"
+        [[ "$_per_ram" =~ ^[0-9]+$ ]] || _per_ram="256"
         echo -e "    Resources:   ${GREEN}${_per_cpu} CPU / ${_per_ram}MB RAM${NC} per relay container"
     fi
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
@@ -2418,6 +2421,10 @@ run_relay_container() {
         local _count=${CONTAINER_COUNT:-1}
         # Reserve 1 core for the host, split the rest among containers (min 0.5 per container)
         cpus=$(awk -v c="$_sys_cores" -v n="$_count" 'BEGIN {v=(c>1)?(c-1)/n:0.5; if(v<0.5)v=0.5; printf "%.1f",v}')
+        # Validate cpus is a valid number (some awk implementations return "inf" on edge cases)
+        if ! [[ "$cpus" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+            cpus="0.5"
+        fi
     elif [ -z "$cpus" ] && [ -n "$DOCKER_CPUS" ]; then
         cpus="$DOCKER_CPUS"
     fi
@@ -2426,7 +2433,12 @@ run_relay_container() {
         local _count=${CONTAINER_COUNT:-1}
         # Reserve 512MB for host, split rest among containers (min 256MB, max 2GB per container)
         local _per_mb=$(awk -v r="$_sys_ram" -v n="$_count" 'BEGIN {v=(r-512)/n; if(v<256)v=256; if(v>2048)v=2048; printf "%.0f",v}')
-        mem="${_per_mb}m"
+        # Validate memory is a valid number
+        if [[ "$_per_mb" =~ ^[0-9]+$ ]]; then
+            mem="${_per_mb}m"
+        else
+            mem="256m"
+        fi
     elif [ -z "$mem" ] && [ -n "$DOCKER_MEMORY" ]; then
         mem="$DOCKER_MEMORY"
     fi
@@ -7483,7 +7495,7 @@ uninstall() {
     echo -e "${RED}╠═══════════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${RED}║                                                                   ║${NC}"
     echo -e "${RED}║  This will remove:                                                ║${NC}"
-    echo -e "${RED}║  • All Tor relay containers (Snowflake & Unbounded proxies)        ║${NC}"
+    echo -e "${RED}║  • All containers (Tor, Snowflake, Unbounded, MTProxy)            ║${NC}"
     echo -e "${RED}║  • All Docker volumes (relay data & keys)                         ║${NC}"
     echo -e "${RED}║  • Systemd/OpenRC services                                        ║${NC}"
     echo -e "${RED}║  • Configuration files in /opt/torware                           ║${NC}"
