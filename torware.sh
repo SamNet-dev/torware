@@ -3144,6 +3144,7 @@ bind-to = "0.0.0.0:${port}"
 concurrency = $concurrency
 
 [stats.prometheus]
+enabled = true
 bind-to = "127.0.0.1:${metrics_port}"
 
 [defense.anti-replay]
@@ -3247,18 +3248,11 @@ get_mtproxy_stats() {
 
     if [ -n "$metrics" ]; then
         # Parse Prometheus metrics - mtg uses prefix "mtg_" by default:
-        # - mtg_domain_fronting_traffic{direction="ingress"} = bytes from clients
-        # - mtg_domain_fronting_traffic{direction="egress"} = bytes to clients
-        # - mtg_telegram_traffic{direction="ingress/egress"} = bytes to/from Telegram
+        # - mtg_telegram_traffic{direction="to_client"} = bytes downloaded (to user)
+        # - mtg_telegram_traffic{direction="from_client"} = bytes uploaded (from user)
         local traffic_in traffic_out
-        # Client traffic (domain fronting) - best measure of user traffic
-        traffic_in=$(echo "$metrics" | awk '/^mtg_domain_fronting_traffic\{.*direction="ingress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-        traffic_out=$(echo "$metrics" | awk '/^mtg_domain_fronting_traffic\{.*direction="egress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-        # If no domain_fronting metrics, try telegram_traffic
-        if [ -z "$traffic_in" ] || [ "$traffic_in" = "0" ]; then
-            traffic_in=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="egress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-            traffic_out=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="ingress"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
-        fi
+        traffic_in=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="to_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        traffic_out=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="from_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
         echo "${traffic_in:-0} ${traffic_out:-0}"
         return
     fi
