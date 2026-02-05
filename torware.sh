@@ -2106,6 +2106,24 @@ save_settings() {
     _TMP_FILES+=("$_tmp")
 
     # Capture current globals BEFORE load_settings overwrites them
+    # Relay settings
+    local _caller_relay_type="${RELAY_TYPE:-bridge}"
+    local _caller_nickname="${NICKNAME:-}"
+    local _caller_contact_info="${CONTACT_INFO:-}"
+    local _caller_bandwidth="${BANDWIDTH:-5}"
+    local _caller_container_count="${CONTAINER_COUNT:-1}"
+    local _caller_orport_base="${ORPORT_BASE:-9001}"
+    local _caller_controlport_base="${CONTROLPORT_BASE:-9051}"
+    local _caller_pt_port_base="${PT_PORT_BASE:-9100}"
+    local _caller_exit_policy="${EXIT_POLICY:-reduced}"
+    local _caller_data_cap_gb="${DATA_CAP_GB:-0}"
+    # Per-container relay types
+    local _caller_relay_type_1="${RELAY_TYPE_1:-}"
+    local _caller_relay_type_2="${RELAY_TYPE_2:-}"
+    local _caller_relay_type_3="${RELAY_TYPE_3:-}"
+    local _caller_relay_type_4="${RELAY_TYPE_4:-}"
+    local _caller_relay_type_5="${RELAY_TYPE_5:-}"
+
     local _caller_snowflake_count="${SNOWFLAKE_COUNT:-1}"
     local _caller_snowflake_cpus_1="${SNOWFLAKE_CPUS_1:-}"
     local _caller_snowflake_memory_1="${SNOWFLAKE_MEMORY_1:-}"
@@ -2170,6 +2188,23 @@ save_settings() {
     _tg_weekly="$_caller_tg_weekly"
     _tg_label="$_caller_tg_label"
     _tg_start_hour="$_caller_tg_start_hour"
+
+    # Restore relay globals after load_settings clobbered them
+    RELAY_TYPE="$_caller_relay_type"
+    NICKNAME="$_caller_nickname"
+    CONTACT_INFO="$_caller_contact_info"
+    BANDWIDTH="$_caller_bandwidth"
+    CONTAINER_COUNT="$_caller_container_count"
+    ORPORT_BASE="$_caller_orport_base"
+    CONTROLPORT_BASE="$_caller_controlport_base"
+    PT_PORT_BASE="$_caller_pt_port_base"
+    EXIT_POLICY="$_caller_exit_policy"
+    DATA_CAP_GB="$_caller_data_cap_gb"
+    RELAY_TYPE_1="$_caller_relay_type_1"
+    RELAY_TYPE_2="$_caller_relay_type_2"
+    RELAY_TYPE_3="$_caller_relay_type_3"
+    RELAY_TYPE_4="$_caller_relay_type_4"
+    RELAY_TYPE_5="$_caller_relay_type_5"
 
     # Restore snowflake globals after load_settings clobbered them
     SNOWFLAKE_COUNT="$_caller_snowflake_count"
@@ -8846,9 +8881,9 @@ manage_containers() {
         redraw=true
 
         echo ""
-        echo -e "  ${BOLD}Current containers: ${GREEN}${CONTAINER_COUNT:-1}${NC}"
+        echo -e "  ${BOLD}Current containers: ${GREEN}${CONTAINER_COUNT:-0}${NC}"
         echo ""
-        for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        for i in $(seq 1 ${CONTAINER_COUNT:-0}); do
             local _rt=$(get_container_relay_type $i)
             local _cn=$(get_container_name $i)
             local _or=$(get_container_orport $i)
@@ -8870,10 +8905,72 @@ manage_containers() {
 
         case "$_mc" in
             a|A)
-                local _cur=${CONTAINER_COUNT:-1}
+                local _cur=${CONTAINER_COUNT:-0}
                 if [ "$_cur" -ge 5 ]; then
                     log_warn "Maximum 5 containers supported"
                 else
+                    # If coming from proxy-only mode and no relay settings yet, prompt for them
+                    if [ "$RELAY_TYPE" = "none" ] && { [ -z "$NICKNAME" ] || [ "$NICKNAME" = "" ]; }; then
+                        echo ""
+                        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+                        echo -e "${CYAN}                   TOR RELAY SETUP                              ${NC}"
+                        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+                        echo ""
+                        echo -e "  ${BOLD}This is your first Tor relay. Please provide some details:${NC}"
+                        echo ""
+
+                        # Nickname
+                        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                        echo -e "  Enter a nickname for your relay (1-19 chars, alphanumeric)"
+                        echo -e "  Press Enter for default: ${GREEN}Torware${NC}"
+                        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                        read -p "  nickname: " _input_nick < /dev/tty || true
+                        if [ -z "$_input_nick" ]; then
+                            NICKNAME="Torware"
+                        elif [[ "$_input_nick" =~ ^[A-Za-z0-9]{1,19}$ ]]; then
+                            NICKNAME="$_input_nick"
+                        else
+                            log_warn "Invalid nickname. Using default: Torware"
+                            NICKNAME="Torware"
+                        fi
+                        echo ""
+
+                        # Contact email
+                        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                        echo -e "  Enter contact email (shown to Tor Project, not public)"
+                        echo -e "  Press Enter to skip"
+                        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                        read -p "  email: " _input_email < /dev/tty || true
+                        CONTACT_INFO="${_input_email:-nobody@example.com}"
+                        echo ""
+
+                        # Bandwidth
+                        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                        echo -e "  Enter bandwidth limit in Mbps (1-100, or -1 for unlimited)"
+                        echo -e "  Press Enter for default: ${GREEN}5${NC} Mbps"
+                        echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                        read -p "  bandwidth: " _input_bw < /dev/tty || true
+                        if [ -z "$_input_bw" ]; then
+                            BANDWIDTH=5
+                        elif [ "$_input_bw" = "-1" ]; then
+                            BANDWIDTH="-1"
+                        elif [[ "$_input_bw" =~ ^[0-9]+$ ]] && [ "$_input_bw" -ge 1 ] && [ "$_input_bw" -le 100 ]; then
+                            BANDWIDTH="$_input_bw"
+                        elif [[ "$_input_bw" =~ ^[0-9]*\.[0-9]+$ ]]; then
+                            local _float_ok=$(awk -v val="$_input_bw" 'BEGIN { print (val >= 1 && val <= 100) ? "yes" : "no" }')
+                            if [ "$_float_ok" = "yes" ]; then
+                                BANDWIDTH="$_input_bw"
+                            else
+                                log_warn "Invalid bandwidth. Using default: 5 Mbps"
+                                BANDWIDTH=5
+                            fi
+                        else
+                            log_warn "Invalid bandwidth. Using default: 5 Mbps"
+                            BANDWIDTH=5
+                        fi
+                        echo ""
+                    fi
+
                     local _new=$((_cur + 1))
                     echo ""
                     echo -e "  ${BOLD}Select type for container ${_new}:${NC}"
@@ -8968,6 +9065,10 @@ manage_containers() {
 
                     CONTAINER_COUNT=$_new
                     eval "RELAY_TYPE_${_new}='${_new_type}'"
+                    # Update main RELAY_TYPE if coming from proxy-only mode
+                    if [ "$RELAY_TYPE" = "none" ] || [ -z "$RELAY_TYPE" ]; then
+                        RELAY_TYPE="$_new_type"
+                    fi
                     save_settings
                     generate_torrc $_new
 
