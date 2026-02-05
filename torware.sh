@@ -2510,9 +2510,11 @@ run_all_containers() {
         log_info "Starting Torware (proxy-only mode)..."
         run_all_snowflake_containers
         run_unbounded_container
+        run_mtproxy_container
         local _any_proxy=false
         is_snowflake_running && _any_proxy=true
         is_unbounded_running && _any_proxy=true
+        is_mtproxy_running && _any_proxy=true
         if [ "$_any_proxy" = "true" ]; then
             log_success "Proxy containers started"
         else
