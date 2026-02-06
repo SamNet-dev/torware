@@ -87,7 +87,6 @@ SNOWFLAKE_COUNT=1
 SNOWFLAKE_CONTAINER="snowflake-proxy"
 SNOWFLAKE_VOLUME="snowflake-data"
 SNOWFLAKE_METRICS_PORT=9999
-SNOWFLAKE_PORT_RANGE="30000:60000"
 SNOWFLAKE_CPUS="1.5"
 SNOWFLAKE_MEMORY="512m"
 SNOWFLAKE_CPUS_1=""
@@ -2277,7 +2276,6 @@ DATA_CAP_GB='${DATA_CAP_GB:-0}'
 # Snowflake Proxy
 SNOWFLAKE_ENABLED='${SNOWFLAKE_ENABLED:-false}'
 SNOWFLAKE_COUNT='${SNOWFLAKE_COUNT:-1}'
-SNOWFLAKE_PORT_RANGE='${SNOWFLAKE_PORT_RANGE:-30000:60000}'
 SNOWFLAKE_CPUS='${SNOWFLAKE_CPUS:-1.0}'
 SNOWFLAKE_MEMORY='${SNOWFLAKE_MEMORY:-256m}'
 SNOWFLAKE_CPUS_1='${SNOWFLAKE_CPUS_1}'
@@ -9592,7 +9590,7 @@ print_summary() {
         fi
     done
     if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
-        echo -e "    Snowflake: Uses ephemeral UDP ports (${GREEN}${SNOWFLAKE_PORT_RANGE}${NC}) — typically auto-traversed via WebRTC"
+        echo -e "    Snowflake: Uses ${GREEN}--network host${NC} — no port forwarding needed (WebRTC auto-traversal)"
     fi
     if [ "$UNBOUNDED_ENABLED" = "true" ]; then
         echo -e "    Unbounded: Uses ${GREEN}--network host${NC} — no port forwarding needed (WebRTC auto-traversal)"
