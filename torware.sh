@@ -5837,6 +5837,70 @@ telegram_send_message() {
     return 1
 }
 
+telegram_send_photo_message() {
+    local photo_url="$1"
+    local caption="${2:-}"
+    local token="${TELEGRAM_BOT_TOKEN}"
+    local chat_id="${TELEGRAM_CHAT_ID}"
+    { [ -z "$token" ] || [ -z "$chat_id" ]; } && return 1
+    local label="${TELEGRAM_SERVER_LABEL:-Torware}"
+    if [ -n "$caption" ]; then
+        caption="[${label}] ${caption}"
+    fi
+    local _cfg
+    _cfg=$(mktemp "${TMPDIR:-/tmp}/.tg_curl.XXXXXX") || return 1
+    chmod 600 "$_cfg"
+    printf 'url = "https://api.telegram.org/bot%s/sendPhoto"\n' "$token" > "$_cfg"
+    curl -s --max-time 15 --max-filesize 10485760 -X POST \
+        -K "$_cfg" \
+        --data-urlencode "chat_id=${chat_id}" \
+        --data-urlencode "photo=${photo_url}" \
+        --data-urlencode "caption=${caption}" \
+        --data-urlencode "parse_mode=Markdown" \
+        >/dev/null 2>&1
+    local rc=$?
+    rm -f "$_cfg"
+    return $rc
+}
+
+telegram_notify_mtproxy_started() {
+    local token="${TELEGRAM_BOT_TOKEN}"
+    local chat_id="${TELEGRAM_CHAT_ID}"
+    { [ -z "$token" ] || [ -z "$chat_id" ]; } && return 0
+    [ "$TELEGRAM_ENABLED" != "true" ] && return 0
+    [ "$MTPROXY_ENABLED" != "true" ] && return 0
+
+    local server_ip
+    server_ip=$(get_public_ip)
+    [ -z "$server_ip" ] && return 1
+
+    local port="${MTPROXY_PORT:-8443}"
+    local secret="$MTPROXY_SECRET"
+    [ -z "$secret" ] && return 1
+
+    local https_link="https://t.me/proxy?server=${server_ip}&port=${port}&secret=${secret}"
+    local tg_link="tg://proxy?server=${server_ip}&port=${port}&secret=${secret}"
+
+    local encoded_link
+    encoded_link=$(printf '%s' "$https_link" | sed 's/&/%26/g; s/?/%3F/g; s/=/%3D/g; s/:/%3A/g; s|/|%2F|g')
+    local qr_url="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encoded_link}"
+
+    local message="📱 *MTProxy Started*
+
+🔗 *Proxy Link (tap to add):*
+\`${tg_link}\`
+
+🌐 *Web Link:*
+${https_link}
+
+📊 Port: ${port} | Domain: ${MTPROXY_DOMAIN}
+
+_Share the QR code below with users who need access._"
+
+    telegram_send_message "$message"
+    telegram_send_photo_message "$qr_url" "📱 *MTProxy QR Code* — Scan in Telegram to connect"
+}
+
 telegram_get_chat_id() {
     local token="${TELEGRAM_BOT_TOKEN}"
     [ -z "$token" ] && return 1
@@ -5856,9 +5920,11 @@ telegram_get_chat_id() {
 import json,sys
 try:
     d=json.loads(sys.stdin.read())
-    msgs=d.get('result',[])
-    if msgs:
-        print(msgs[-1]['message']['chat']['id'])
+    for u in reversed(d.get('result',[])):
+        if 'message' in u:
+            print(u['message']['chat']['id']); break
+        elif 'my_chat_member' in u:
+            print(u['my_chat_member']['chat']['id']); break
 except: pass
 " <<< "$response" 2>/dev/null)
     fi
@@ -6093,6 +6159,27 @@ telegram_setup_wizard() {
         trap - SIGINT; return
     fi
 
+    # Validate token is a real bot by calling getMe
+    echo -ne "  Verifying bot token... "
+    local _me_cfg
+    _me_cfg=$(mktemp "${TMPDIR:-/tmp}/.tg_curl.XXXXXX") || true
+    if [ -n "$_me_cfg" ]; then
+        chmod 600 "$_me_cfg"
+        printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$TELEGRAM_BOT_TOKEN" > "$_me_cfg"
+        local _me_resp
+        _me_resp=$(curl -s --max-time 10 -K "$_me_cfg" 2>/dev/null)
+        rm -f "$_me_cfg"
+        if echo "$_me_resp" | grep -q '"ok":true'; then
+            echo -e "${GREEN}✓ Valid${NC}"
+        else
+            echo -e "${RED}✗ Invalid token${NC}"
+            echo -e "  ${RED}The Telegram API rejected this token. Please check it and try again.${NC}"
+            TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
+            read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+            trap - SIGINT; return
+        fi
+    fi
+
     echo ""
     echo -e "  ${BOLD}Step 2: Get Your Chat ID${NC}"
     echo -e "  ${CYAN}────────────────────────${NC}"
@@ -6118,43 +6205,92 @@ telegram_setup_wizard() {
     done
 
     if [ -z "$TELEGRAM_CHAT_ID" ]; then
-        echo -e "${RED}✗ Could not detect chat ID${NC}"
-        echo -e "  Make sure you sent /start to the bot and try again."
-        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
-        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
-        trap - SIGINT; return
+        echo -e "${RED}✗ Could not auto-detect chat ID${NC}"
+        echo ""
+        echo -e "  ${BOLD}You can enter it manually:${NC}"
+        echo -e "  ${CYAN}────────────────────────────${NC}"
+        echo -e "  Option 1: Send /start to your bot, then press Enter to retry"
+        echo -e "  Option 2: Find your chat ID via @userinfobot on Telegram"
+        echo -e "            and enter it below"
+        echo ""
+        read -p "  Enter chat ID (or press Enter to retry): " _manual_chatid < /dev/tty || true
+        if [ -z "$_manual_chatid" ]; then
+            # Retry detection
+            echo -ne "  Retrying detection... "
+            attempts=0
+            while [ $attempts -lt 5 ] && [ -z "$TELEGRAM_CHAT_ID" ]; do
+                if telegram_get_chat_id; then
+                    break
+                fi
+                attempts=$((attempts + 1))
+                sleep 2
+            done
+        elif echo "$_manual_chatid" | grep -qE '^-?[0-9]+$'; then
+            TELEGRAM_CHAT_ID="$_manual_chatid"
+        else
+            echo -e "  ${RED}Invalid chat ID. Must be a number.${NC}"
+        fi
+
+        if [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo -e "  ${RED}✗ Could not get chat ID. Setup cancelled.${NC}"
+            TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
+            read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+            trap - SIGINT; return
+        fi
     fi
     echo -e "${GREEN}✓ Chat ID: ${TELEGRAM_CHAT_ID}${NC}"
 
     echo ""
-    echo -e "  ${BOLD}Step 3: Notification Interval${NC}"
+    echo -e "  ${BOLD}Step 3: Notification Mode${NC}"
     echo -e "  ${CYAN}─────────────────────────────${NC}"
-    echo -e "  1. Every 1 hour"
-    echo -e "  2. Every 3 hours"
-    echo -e "  3. Every 6 hours (recommended)"
-    echo -e "  4. Every 12 hours"
-    echo -e "  5. Every 24 hours"
+    echo -e "  1. 📬 Enable notifications (reports, alerts, summaries) ${DIM}(recommended)${NC}"
+    echo -e "  2. 🔇 Bot only (no auto-notifications, manual use only)"
     echo ""
-    read -p "  Choice [1-5] (default 3): " ichoice < /dev/tty || true
-    case "$ichoice" in
-        1) TELEGRAM_INTERVAL=1 ;;
-        2) TELEGRAM_INTERVAL=3 ;;
-        4) TELEGRAM_INTERVAL=12 ;;
-        5) TELEGRAM_INTERVAL=24 ;;
-        *) TELEGRAM_INTERVAL=6 ;;
-    esac
+    read -p "  Choice [1-2] (default 1): " _notif_choice < /dev/tty || true
 
-    echo ""
-    echo -e "  ${BOLD}Step 4: Start Hour${NC}"
-    echo -e "  ${CYAN}─────────────────────────────${NC}"
-    echo -e "  What hour should reports start? (0-23, e.g. 8 = 8:00 AM)"
-    echo -e "  Reports will repeat every ${TELEGRAM_INTERVAL}h from this hour."
-    echo ""
-    read -p "  Start hour [0-23] (default 0): " shchoice < /dev/tty || true
-    if [ -n "$shchoice" ] && [ "$shchoice" -ge 0 ] 2>/dev/null && [ "$shchoice" -le 23 ] 2>/dev/null; then
-        TELEGRAM_START_HOUR=$shchoice
-    else
+    if [ "${_notif_choice:-1}" = "2" ]; then
+        # Bot only — skip interval/start hour, disable auto-notifications
+        TELEGRAM_ALERTS_ENABLED=false
+        TELEGRAM_DAILY_SUMMARY=false
+        TELEGRAM_WEEKLY_SUMMARY=false
+        TELEGRAM_INTERVAL=6
         TELEGRAM_START_HOUR=0
+    else
+        # Full notifications — ask interval and start hour
+        TELEGRAM_ALERTS_ENABLED=true
+        TELEGRAM_DAILY_SUMMARY=true
+        TELEGRAM_WEEKLY_SUMMARY=true
+
+        echo ""
+        echo -e "  ${BOLD}Step 4: Notification Interval${NC}"
+        echo -e "  ${CYAN}─────────────────────────────${NC}"
+        echo -e "  1. Every 1 hour"
+        echo -e "  2. Every 3 hours"
+        echo -e "  3. Every 6 hours (recommended)"
+        echo -e "  4. Every 12 hours"
+        echo -e "  5. Every 24 hours"
+        echo ""
+        read -p "  Choice [1-5] (default 3): " ichoice < /dev/tty || true
+        case "$ichoice" in
+            1) TELEGRAM_INTERVAL=1 ;;
+            2) TELEGRAM_INTERVAL=3 ;;
+            4) TELEGRAM_INTERVAL=12 ;;
+            5) TELEGRAM_INTERVAL=24 ;;
+            *) TELEGRAM_INTERVAL=6 ;;
+        esac
+
+        echo ""
+        echo -e "  ${BOLD}Step 5: Start Hour${NC}"
+        echo -e "  ${CYAN}─────────────────────────────${NC}"
+        echo -e "  What hour should reports start? (0-23, e.g. 8 = 8:00 AM)"
+        echo -e "  Reports will repeat every ${TELEGRAM_INTERVAL}h from this hour."
+        echo ""
+        read -p "  Start hour [0-23] (default 0): " shchoice < /dev/tty || true
+        if [ -n "$shchoice" ] && [ "$shchoice" -ge 0 ] 2>/dev/null && [ "$shchoice" -le 23 ] 2>/dev/null; then
+            TELEGRAM_START_HOUR=$shchoice
+        else
+            TELEGRAM_START_HOUR=0
+        fi
     fi
 
     echo ""
@@ -6169,16 +6305,19 @@ telegram_setup_wizard() {
     fi
 
     TELEGRAM_ENABLED=true
-    TELEGRAM_ALERTS_ENABLED=true
-    TELEGRAM_DAILY_SUMMARY=true
-    TELEGRAM_WEEKLY_SUMMARY=true
+
     save_settings
     telegram_start_notify
 
     trap - SIGINT
     echo ""
-    echo -e "  ${GREEN}${BOLD}✓ Telegram notifications enabled!${NC}"
-    echo -e "  You'll receive reports every ${TELEGRAM_INTERVAL}h starting at ${TELEGRAM_START_HOUR}:00."
+    if [ "$TELEGRAM_ALERTS_ENABLED" = "true" ]; then
+        echo -e "  ${GREEN}${BOLD}✓ Telegram notifications enabled!${NC}"
+        echo -e "  You'll receive reports every ${TELEGRAM_INTERVAL}h starting at ${TELEGRAM_START_HOUR}:00."
+    else
+        echo -e "  ${GREEN}${BOLD}✓ Telegram bot connected!${NC}"
+        echo -e "  Auto-notifications are off. Use the menu to send reports manually."
+    fi
     echo ""
     read -n 1 -s -r -p "  Press any key to return..." < /dev/tty || true
 }
