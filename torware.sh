@@ -6117,7 +6117,10 @@ telegram_setup_wizard() {
     local _saved_enabled="$TELEGRAM_ENABLED"
     local _saved_starthour="$TELEGRAM_START_HOUR"
     local _saved_label="$TELEGRAM_SERVER_LABEL"
-    trap 'TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; trap - SIGINT; echo; return' SIGINT
+    local _saved_alerts="$TELEGRAM_ALERTS_ENABLED"
+    local _saved_daily="$TELEGRAM_DAILY_SUMMARY"
+    local _saved_weekly="$TELEGRAM_WEEKLY_SUMMARY"
+    trap 'TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"; trap - SIGINT; echo; return' SIGINT
     clear
     echo -e "${CYAN}══════════════════════════════════════════════════════════════════${NC}"
     echo -e "              ${BOLD}TELEGRAM NOTIFICATIONS SETUP${NC}"
@@ -6154,7 +6157,7 @@ telegram_setup_wizard() {
     # Validate token format
     if ! echo "$TELEGRAM_BOT_TOKEN" | grep -qE '^[0-9]+:[A-Za-z0-9_-]+$'; then
         echo -e "  ${RED}Invalid token format. Should be like: 123456789:ABCdefGHI...${NC}"
-        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
+        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"
         read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
         trap - SIGINT; return
     fi
@@ -6174,7 +6177,7 @@ telegram_setup_wizard() {
         else
             echo -e "${RED}✗ Invalid token${NC}"
             echo -e "  ${RED}The Telegram API rejected this token. Please check it and try again.${NC}"
-            TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
+            TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"
             read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
             trap - SIGINT; return
         fi
@@ -6191,7 +6194,7 @@ telegram_setup_wizard() {
     echo -e ""
     echo -e "  3. Press Enter here when done..."
     echo ""
-    read -p "  Press Enter after sending /start to your bot... " < /dev/tty || { trap - SIGINT; TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; return; }
+    read -p "  Press Enter after sending /start to your bot... " < /dev/tty || { trap - SIGINT; TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"; return; }
 
     echo -ne "  Detecting chat ID... "
     local attempts=0
@@ -6233,7 +6236,7 @@ telegram_setup_wizard() {
 
         if [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo -e "  ${RED}✗ Could not get chat ID. Setup cancelled.${NC}"
-            TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
+            TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"
             read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
             trap - SIGINT; return
         fi
@@ -6293,21 +6296,26 @@ telegram_setup_wizard() {
         fi
     fi
 
+    TELEGRAM_ENABLED=true
+    save_settings
+
     echo ""
     echo -ne "  Sending test message... "
     if telegram_test_message; then
         echo -e "${GREEN}✓ Success!${NC}"
     else
         echo -e "${RED}✗ Failed to send. Check your token.${NC}"
-        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"
+        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; TELEGRAM_START_HOUR="$_saved_starthour"; TELEGRAM_SERVER_LABEL="$_saved_label"; TELEGRAM_ALERTS_ENABLED="$_saved_alerts"; TELEGRAM_DAILY_SUMMARY="$_saved_daily"; TELEGRAM_WEEKLY_SUMMARY="$_saved_weekly"
+        save_settings
         read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
         trap - SIGINT; return
     fi
-
-    TELEGRAM_ENABLED=true
-
-    save_settings
-    telegram_start_notify
+    # Only start the notification service if at least one notification type is enabled
+    if [ "$TELEGRAM_ALERTS_ENABLED" = "true" ] || [ "$TELEGRAM_DAILY_SUMMARY" = "true" ] || [ "$TELEGRAM_WEEKLY_SUMMARY" = "true" ]; then
+        telegram_start_notify
+    else
+        telegram_disable_service
+    fi
 
     trap - SIGINT
     echo ""
@@ -7326,6 +7334,8 @@ while true; do
     fi
 
     # Regular periodic report (wall-clock aligned to start hour)
+    # Skip if all notification types are disabled (bot-only mode)
+    if [ "${TELEGRAM_ALERTS_ENABLED:-true}" = "true" ] || [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] || [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ]; then
     interval_hours=${TELEGRAM_INTERVAL:-6}
     start_hour=${TELEGRAM_START_HOUR:-0}
     interval_secs=$((interval_hours * 3600))
@@ -7339,6 +7349,7 @@ while true; do
             last_report_ts=$now_ts
             echo "$now_ts" > "$_ts_dir/.last_report_ts"
         fi
+    fi
     fi
 done
 TGEOF
@@ -7415,17 +7426,30 @@ show_telegram_menu() {
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
             echo ""
             local _sh="${TELEGRAM_START_HOUR:-0}"
-            echo -e "  Status: ${GREEN}✓ Enabled${NC} (every ${TELEGRAM_INTERVAL}h starting at ${_sh}:00)"
-            echo ""
             local alerts_st="${GREEN}ON${NC}"
             [ "${TELEGRAM_ALERTS_ENABLED:-true}" != "true" ] && alerts_st="${RED}OFF${NC}"
             local daily_st="${GREEN}ON${NC}"
             [ "${TELEGRAM_DAILY_SUMMARY:-true}" != "true" ] && daily_st="${RED}OFF${NC}"
             local weekly_st="${GREEN}ON${NC}"
             [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" != "true" ] && weekly_st="${RED}OFF${NC}"
+            # Check if any notification type is active
+            local _any_notif=false
+            if [ "${TELEGRAM_ALERTS_ENABLED:-true}" = "true" ] || [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] || [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ]; then
+                _any_notif=true
+            fi
+            if [ "$_any_notif" = "true" ]; then
+                echo -e "  Status: ${GREEN}✓ Enabled${NC} (every ${TELEGRAM_INTERVAL}h starting at ${_sh}:00)"
+            else
+                echo -e "  Status: ${GREEN}✓ Connected${NC} ${DIM}(bot only — no auto-notifications)${NC}"
+            fi
+            echo ""
             echo -e "  1. 📩 Send test message"
-            echo -e "  2. ⏱  Change interval"
-            echo -e "  3. ❌ Disable notifications"
+            if [ "$_any_notif" = "true" ]; then
+                echo -e "  2. ⏱  Change interval"
+            else
+                echo -e "  2. 📬 Enable notifications"
+            fi
+            echo -e "  3. ❌ Disconnect bot"
             echo -e "  4. 🔄 Reconfigure (new bot/chat)"
             echo -e "  5. 🚨 Alerts (CPU/RAM/down):    ${alerts_st}"
             echo -e "  6. 📋 Daily summary:            ${daily_st}"
@@ -7452,6 +7476,12 @@ show_telegram_menu() {
                     ;;
                 2)
                     echo ""
+                    if [ "$_any_notif" != "true" ]; then
+                        # Bot-only mode — enable notifications first
+                        TELEGRAM_ALERTS_ENABLED=true
+                        TELEGRAM_DAILY_SUMMARY=true
+                        TELEGRAM_WEEKLY_SUMMARY=true
+                    fi
                     echo -e "  Select notification interval:"
                     echo -e "  1. Every 1 hour"
                     echo -e "  2. Every 3 hours"
@@ -7499,7 +7529,11 @@ show_telegram_menu() {
                         echo -e "  ${GREEN}✓ Alerts enabled${NC}"
                     fi
                     save_settings
-                    telegram_start_notify
+                    if [ "$TELEGRAM_ALERTS_ENABLED" = "true" ] || [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] || [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ]; then
+                        telegram_start_notify
+                    else
+                        telegram_disable_service
+                    fi
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     ;;
                 6)
@@ -7511,7 +7545,11 @@ show_telegram_menu() {
                         echo -e "  ${GREEN}✓ Daily summary enabled${NC}"
                     fi
                     save_settings
-                    telegram_start_notify
+                    if [ "${TELEGRAM_ALERTS_ENABLED:-true}" = "true" ] || [ "$TELEGRAM_DAILY_SUMMARY" = "true" ] || [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ]; then
+                        telegram_start_notify
+                    else
+                        telegram_disable_service
+                    fi
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     ;;
                 7)
@@ -7523,7 +7561,11 @@ show_telegram_menu() {
                         echo -e "  ${GREEN}✓ Weekly summary enabled${NC}"
                     fi
                     save_settings
-                    telegram_start_notify
+                    if [ "${TELEGRAM_ALERTS_ENABLED:-true}" = "true" ] || [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] || [ "$TELEGRAM_WEEKLY_SUMMARY" = "true" ]; then
+                        telegram_start_notify
+                    else
+                        telegram_disable_service
+                    fi
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     ;;
                 8)
@@ -7536,7 +7578,9 @@ show_telegram_menu() {
                     read -p "  New label: " new_label < /dev/tty || true
                     TELEGRAM_SERVER_LABEL="${new_label}"
                     save_settings
-                    telegram_start_notify
+                    if [ "${TELEGRAM_ALERTS_ENABLED:-true}" = "true" ] || [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] || [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ]; then
+                        telegram_start_notify
+                    fi
                     local display_label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
                     echo -e "  ${GREEN}✓ Server label set to: ${display_label}${NC}"
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
@@ -7664,20 +7708,20 @@ show_bridge_line() {
 
 uninstall() {
     echo ""
-    echo -e "${RED}╔═══════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║                    UNINSTALL TORWARE                    ║${NC}"
-    echo -e "${RED}╠═══════════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${RED}║                                                                   ║${NC}"
-    echo -e "${RED}║  This will remove:                                                ║${NC}"
-    echo -e "${RED}║  • All containers (Tor, Snowflake, Unbounded, MTProxy)            ║${NC}"
-    echo -e "${RED}║  • All Docker volumes (relay data & keys)                         ║${NC}"
-    echo -e "${RED}║  • Systemd/OpenRC services                                        ║${NC}"
-    echo -e "${RED}║  • Configuration files in /opt/torware                           ║${NC}"
-    echo -e "${RED}║  • Management CLI (/usr/local/bin/torware)                       ║${NC}"
-    echo -e "${RED}║                                                                   ║${NC}"
-    echo -e "${RED}║  Docker itself will NOT be removed.                                ║${NC}"
-    echo -e "${RED}║                                                                   ║${NC}"
-    echo -e "${RED}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${RED}╔═════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║                     UNINSTALL TORWARE                     ║${NC}"
+    echo -e "${RED}╠═════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║                                                           ║${NC}"
+    echo -e "${RED}║  This will remove:                                        ║${NC}"
+    echo -e "${RED}║  • All containers (Tor, Snowflake, Unbounded, MTProxy)    ║${NC}"
+    echo -e "${RED}║  • All Docker volumes (relay data & keys)                 ║${NC}"
+    echo -e "${RED}║  • Systemd/OpenRC services                                ║${NC}"
+    echo -e "${RED}║  • Configuration files in /opt/torware                    ║${NC}"
+    echo -e "${RED}║  • Management CLI (/usr/local/bin/torware)                ║${NC}"
+    echo -e "${RED}║                                                           ║${NC}"
+    echo -e "${RED}║  Docker itself will NOT be removed.                       ║${NC}"
+    echo -e "${RED}║                                                           ║${NC}"
+    echo -e "${RED}╚═════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     read -p "  Type 'yes' to confirm uninstall: " confirm < /dev/tty || true
