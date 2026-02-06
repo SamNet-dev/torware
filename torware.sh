@@ -8736,296 +8736,7 @@ show_menu() {
                 read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
                 ;;
             m|M)
-                if [ "$MTPROXY_ENABLED" = "true" ]; then
-                    echo ""
-                    echo -e "${CYAN}═══ MTProxy (Telegram) ═══${NC}"
-                    echo ""
-                    local _mtpn="$MTPROXY_CONTAINER"
-                    local _mtps="${RED}Stopped${NC}"
-                    is_mtproxy_running && _mtps="${GREEN}Running${NC}"
-                    local _mtp_stats=$(get_mtproxy_stats 2>/dev/null)
-                    local _mtp_in=$(echo "$_mtp_stats" | awk '{print $1}')
-                    local _mtp_out=$(echo "$_mtp_stats" | awk '{print $2}')
-                    echo -e "  Status:      [${_mtps}]"
-                    echo -e "  Traffic:     ↓ ${CYAN}$(format_bytes ${_mtp_in:-0})${NC}  ↑ ${CYAN}$(format_bytes ${_mtp_out:-0})${NC}"
-                    echo -e "  Port:        ${CYAN}${MTPROXY_PORT}${NC}"
-                    echo -e "  FakeTLS:     ${CYAN}${MTPROXY_DOMAIN}${NC}"
-                    echo -e "  Max Conns:   ${CYAN}${MTPROXY_CONCURRENCY:-8192}${NC}"
-                    if [ -n "$MTPROXY_BLOCKLIST_COUNTRIES" ]; then
-                        echo -e "  Geo-Block:   ${YELLOW}${MTPROXY_BLOCKLIST_COUNTRIES}${NC}"
-                    else
-                        echo -e "  Geo-Block:   ${DIM}None${NC}"
-                    fi
-                    echo -e "  CPU/RAM:     ${CYAN}${MTPROXY_CPUS:-0.5}${NC} / ${CYAN}${MTPROXY_MEMORY:-128m}${NC}"
-                    echo ""
-                    echo -e "    1. Show proxy link & QR code"
-                    echo -e "    2. Restart MTProxy"
-                    echo -e "    3. Stop MTProxy"
-                    echo -e "    4. Disable MTProxy"
-                    echo -e "    5. Change settings (port/domain/resources)"
-                    echo -e "    6. Regenerate secret"
-                    echo -e "    7. Security settings (connection limit, geo-block)"
-                    echo -e "    ${RED}8. Remove MTProxy (stop, remove container & image)${NC}"
-                    if [ "$TELEGRAM_ENABLED" = "true" ]; then
-                        echo -e "    9. 📱 Send link via Telegram"
-                    fi
-                    echo -e "    0. Back"
-                    read -p "  choice: " mtp_choice < /dev/tty || true
-                    case "${mtp_choice:-0}" in
-                        1)
-                            echo ""
-                            show_mtproxy_qr
-                            echo ""
-                            echo -e "  ${BOLD}tg:// link (for sharing):${NC}"
-                            echo -e "  ${CYAN}$(get_mtproxy_link)${NC}"
-                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
-                            echo ""
-                            ;;
-                        2) restart_mtproxy_container ;;
-                        3)
-                            stop_mtproxy_container
-                            log_warn "MTProxy stopped but still enabled. It will restart on next 'torware start'. Use option 4 to disable permanently."
-                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
-                            echo ""
-                            ;;
-                        4)
-                            MTPROXY_ENABLED="false"
-                            stop_mtproxy_container
-                            save_settings
-                            log_success "MTProxy disabled"
-                            ;;
-                        5)
-                            echo ""
-                            echo -e "  ${BOLD}MTProxy Settings${NC}"
-                            echo ""
-                            local _mtp_old_port="$MTPROXY_PORT"
-                            echo -e "  ${DIM}Note: MTProxy uses host networking. Choose an available port.${NC}"
-                            echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
-                            read -p "    Port [${MTPROXY_PORT}]: " _mtp_port < /dev/tty || true
-                            if [ -n "$_mtp_port" ]; then
-                                if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
-                                    # Check if port is available
-                                    if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
-                                        log_warn "Port ${_mtp_port} is already in use. Please choose another port."
-                                    else
-                                        MTPROXY_PORT="$_mtp_port"
-                                    fi
-                                else
-                                    log_warn "Invalid port"
-                                fi
-                            fi
-                            echo ""
-                            echo -e "  ${DIM}FakeTLS domain (traffic disguised as HTTPS to this domain):${NC}"
-                            echo -e "  ${DIM}  1. cloudflare.com${NC}"
-                            echo -e "  ${DIM}  2. google.com${NC}"
-                            echo -e "  ${DIM}  3. Keep current (${MTPROXY_DOMAIN})${NC}"
-                            echo -e "  ${DIM}  4. Custom domain${NC}"
-                            read -p "    Domain choice [3]: " _mtp_dom < /dev/tty || true
-                            case "${_mtp_dom:-3}" in
-                                1) MTPROXY_DOMAIN="cloudflare.com"; MTPROXY_SECRET="" ;;
-                                2) MTPROXY_DOMAIN="google.com"; MTPROXY_SECRET="" ;;
-                                4)
-                                    read -p "    Enter domain: " _mtp_cdom < /dev/tty || true
-                                    if [ -n "$_mtp_cdom" ]; then
-                                        MTPROXY_DOMAIN="$_mtp_cdom"
-                                        MTPROXY_SECRET=""
-                                    fi
-                                    ;;
-                            esac
-                            echo ""
-                            read -p "    CPU cores [${MTPROXY_CPUS:-0.5}]: " _mtp_cpu < /dev/tty || true
-                            read -p "    RAM limit [${MTPROXY_MEMORY:-128m}]: " _mtp_mem < /dev/tty || true
-                            if [ -n "$_mtp_cpu" ]; then
-                                [[ "$_mtp_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] && MTPROXY_CPUS="$_mtp_cpu" || log_warn "Invalid CPU"
-                            fi
-                            if [ -n "$_mtp_mem" ]; then
-                                [[ "$_mtp_mem" =~ ^[0-9]+[mMgG]$ ]] && MTPROXY_MEMORY="$(echo "$_mtp_mem" | tr '[:upper:]' '[:lower:]')" || log_warn "Invalid RAM"
-                            fi
-                            save_settings
-                            log_success "MTProxy settings updated"
-                            # Warn if port changed - URL will be different
-                            if [ "$MTPROXY_PORT" != "$_mtp_old_port" ]; then
-                                echo ""
-                                log_warn "Port changed from ${_mtp_old_port} to ${MTPROXY_PORT}"
-                                log_warn "The proxy URL has changed! Old links will no longer work."
-                                echo -e "  ${DIM}Users will need the new link to connect.${NC}"
-                            fi
-                            echo ""
-                            read -p "  Restart MTProxy to apply? [Y/n] " _mtp_rs < /dev/tty || true
-                            if [[ ! "$_mtp_rs" =~ ^[Nn]$ ]]; then
-                                restart_mtproxy_container
-                                # If port changed and Telegram enabled, offer to send new link
-                                if [ "$MTPROXY_PORT" != "$_mtp_old_port" ] && [ "$TELEGRAM_ENABLED" = "true" ]; then
-                                    echo ""
-                                    read -p "  Send new proxy link to Telegram? [Y/n] " _mtp_tg < /dev/tty || true
-                                    if [[ ! "$_mtp_tg" =~ ^[Nn]$ ]]; then
-                                        telegram_notify_mtproxy_started
-                                        log_success "New proxy link sent to Telegram"
-                                    fi
-                                fi
-                            fi
-                            ;;
-                        6)
-                            echo ""
-                            read -p "  Regenerate secret? Old links will stop working. [y/N] " _mtp_regen < /dev/tty || true
-                            if [[ "$_mtp_regen" =~ ^[Yy]$ ]]; then
-                                MTPROXY_SECRET=""
-                                save_settings
-                                restart_mtproxy_container
-                                log_success "New secret generated"
-                                # Offer to send new link via Telegram
-                                if [ "$TELEGRAM_ENABLED" = "true" ]; then
-                                    echo ""
-                                    read -p "  Send new proxy link to Telegram? [Y/n] " _mtp_tg < /dev/tty || true
-                                    if [[ ! "$_mtp_tg" =~ ^[Nn]$ ]]; then
-                                        telegram_notify_mtproxy_started
-                                        log_success "New proxy link sent to Telegram"
-                                    fi
-                                fi
-                            fi
-                            ;;
-                        7)
-                            echo ""
-                            echo -e "  ${BOLD}Security Settings${NC}"
-                            echo ""
-                            echo -e "  ${DIM}Max concurrent connections (default: 8192):${NC}"
-                            read -p "    Max connections [${MTPROXY_CONCURRENCY:-8192}]: " _mtp_conc < /dev/tty || true
-                            if [ -n "$_mtp_conc" ]; then
-                                [[ "$_mtp_conc" =~ ^[0-9]+$ ]] && MTPROXY_CONCURRENCY="$_mtp_conc" || log_warn "Invalid number"
-                            fi
-                            echo ""
-                            echo -e "  ${BOLD}Geo-blocking (block connections from specific countries)${NC}"
-                            echo -e "  ${DIM}Block countries that don't need censorship circumvention${NC}"
-                            echo -e "  ${DIM}(reduces abuse from data centers in open-internet regions)${NC}"
-                            echo ""
-                            if [ -n "$MTPROXY_BLOCKLIST_COUNTRIES" ]; then
-                                echo -e "  Current blocklist: ${YELLOW}$MTPROXY_BLOCKLIST_COUNTRIES${NC}"
-                            else
-                                echo -e "  Current blocklist: ${GREEN}None (all allowed)${NC}"
-                            fi
-                            echo ""
-                            echo -e "  ${DIM}Available countries to block:${NC}"
-                            echo -e "    ${GREEN}1.${NC} US - United States"
-                            echo -e "    ${GREEN}2.${NC} DE - Germany"
-                            echo -e "    ${GREEN}3.${NC} NL - Netherlands"
-                            echo -e "    ${GREEN}4.${NC} FR - France"
-                            echo -e "    ${GREEN}5.${NC} GB - United Kingdom"
-                            echo -e "    ${GREEN}6.${NC} SG - Singapore"
-                            echo -e "    ${GREEN}7.${NC} JP - Japan"
-                            echo -e "    ${GREEN}8.${NC} CA - Canada"
-                            echo -e "    ${GREEN}9.${NC} AU - Australia"
-                            echo -e "   ${GREEN}10.${NC} KR - South Korea"
-                            echo -e "   ${GREEN}11.${NC} CN - China"
-                            echo -e "   ${GREEN}12.${NC} RU - Russia"
-                            echo ""
-                            echo -e "  ${DIM}Enter numbers separated by commas (e.g., 1,2,3) or 'clear' to disable${NC}"
-                            read -p "    Select countries to block: " _mtp_block_sel < /dev/tty || true
-                            if [ -n "$_mtp_block_sel" ]; then
-                                if [ "$_mtp_block_sel" = "clear" ] || [ "$_mtp_block_sel" = "none" ] || [ "$_mtp_block_sel" = "0" ]; then
-                                    MTPROXY_BLOCKLIST_COUNTRIES=""
-                                    log_info "Geo-blocking disabled"
-                                else
-                                    # Map numbers to country codes
-                                    local _geo_codes=""
-                                    local _geo_map=("" "US" "DE" "NL" "FR" "GB" "SG" "JP" "CA" "AU" "KR" "CN" "RU")
-                                    for _num in $(echo "$_mtp_block_sel" | tr ',' ' '); do
-                                        if [[ "$_num" =~ ^[0-9]+$ ]] && [ "$_num" -ge 1 ] && [ "$_num" -le 12 ]; then
-                                            [ -n "$_geo_codes" ] && _geo_codes+=","
-                                            _geo_codes+="${_geo_map[$_num]}"
-                                        fi
-                                    done
-                                    if [ -n "$_geo_codes" ]; then
-                                        MTPROXY_BLOCKLIST_COUNTRIES="$_geo_codes"
-                                        log_info "Will block: $_geo_codes"
-                                    fi
-                                fi
-                            fi
-                            save_settings
-                            log_success "Security settings updated"
-                            echo ""
-                            read -p "  Restart MTProxy to apply? [Y/n] " _mtp_sec_rs < /dev/tty || true
-                            if [[ ! "$_mtp_sec_rs" =~ ^[Nn]$ ]]; then
-                                restart_mtproxy_container
-                            fi
-                            ;;
-                        8)
-                            echo ""
-                            read -p "  Are you sure? This will remove the container and image. [y/N] " _mtp_rm < /dev/tty || true
-                            if [[ "$_mtp_rm" =~ ^[Yy]$ ]]; then
-                                MTPROXY_ENABLED="false"
-                                stop_mtproxy_container
-                                docker rm -f "$MTPROXY_CONTAINER" 2>/dev/null || true
-                                docker rmi "$MTPROXY_IMAGE" 2>/dev/null || true
-                                rm -rf "$INSTALL_DIR/mtproxy" 2>/dev/null || true
-                                MTPROXY_SECRET=""
-                                save_settings
-                                log_success "MTProxy fully removed"
-                            else
-                                log_info "Cancelled"
-                            fi
-                            ;;
-                        9)
-                            echo ""
-                            if [ "$TELEGRAM_ENABLED" != "true" ]; then
-                                log_warn "Telegram bot is not enabled."
-                                echo -e "  ${DIM}Enable Telegram notifications first from the main menu.${NC}"
-                            elif ! is_mtproxy_running; then
-                                log_warn "MTProxy is not running. Start it first."
-                            else
-                                echo -ne "  Sending link & QR to Telegram... "
-                                if telegram_notify_mtproxy_started; then
-                                    echo -e "${GREEN}✓ Sent!${NC}"
-                                else
-                                    echo -e "${RED}✗ Failed${NC}"
-                                fi
-                            fi
-                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
-                            ;;
-                    esac
-                else
-                    echo ""
-                    echo -e "  ${BOLD}📱 MTProxy (Telegram Proxy)${NC}"
-                    echo ""
-                    echo -e "  Run a proxy that helps censored users access Telegram."
-                    echo -e "  Uses FakeTLS to disguise traffic as normal HTTPS."
-                    echo -e "  Very lightweight (~50MB RAM). Share link/QR with users."
-                    echo ""
-                    read -p "  Enable MTProxy? [y/N] " mtp_en < /dev/tty || true
-                    if [[ "$mtp_en" =~ ^[Yy]$ ]]; then
-                        MTPROXY_ENABLED="true"
-                        echo ""
-                        echo -e "  ${DIM}FakeTLS domain (traffic disguised as HTTPS to this domain):${NC}"
-                        echo -e "  ${DIM}  1. cloudflare.com (recommended)${NC}"
-                        echo -e "  ${DIM}  2. google.com${NC}"
-                        echo -e "  ${DIM}  3. Custom domain${NC}"
-                        read -p "  Domain choice [1]: " _mtp_dom < /dev/tty || true
-                        case "${_mtp_dom:-1}" in
-                            2) MTPROXY_DOMAIN="google.com" ;;
-                            3)
-                                read -p "  Enter domain: " _mtp_cdom < /dev/tty || true
-                                MTPROXY_DOMAIN="${_mtp_cdom:-cloudflare.com}"
-                                ;;
-                            *) MTPROXY_DOMAIN="cloudflare.com" ;;
-                        esac
-                        echo ""
-                        echo -e "  ${DIM}MTProxy uses host networking. Choose an available port.${NC}"
-                        echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
-                        read -p "  Port [8443]: " _mtp_port < /dev/tty || true
-                        _mtp_port="${_mtp_port:-8443}"
-                        if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
-                            if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
-                                log_warn "Port ${_mtp_port} appears to be in use. Trying anyway..."
-                            fi
-                            MTPROXY_PORT="$_mtp_port"
-                        else
-                            MTPROXY_PORT=8443
-                        fi
-                        MTPROXY_SECRET=""
-                        save_settings
-                        run_mtproxy_container
-                    fi
-                fi
-                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                show_mtproxy_menu
                 ;;
             t|T)
                 show_telegram_menu
@@ -9602,6 +9313,303 @@ print_summary() {
 }
 
 #═══════════════════════════════════════════════════════════════════════
+# MTProxy Menu (Telegram Proxy Settings)
+#═══════════════════════════════════════════════════════════════════════
+
+show_mtproxy_menu() {
+                if [ "$MTPROXY_ENABLED" = "true" ]; then
+                    echo ""
+                    echo -e "${CYAN}═══ MTProxy (Telegram) ═══${NC}"
+                    echo ""
+                    local _mtpn="$MTPROXY_CONTAINER"
+                    local _mtps="${RED}Stopped${NC}"
+                    is_mtproxy_running && _mtps="${GREEN}Running${NC}"
+                    local _mtp_stats=$(get_mtproxy_stats 2>/dev/null)
+                    local _mtp_in=$(echo "$_mtp_stats" | awk '{print $1}')
+                    local _mtp_out=$(echo "$_mtp_stats" | awk '{print $2}')
+                    echo -e "  Status:      [${_mtps}]"
+                    echo -e "  Traffic:     ↓ ${CYAN}$(format_bytes ${_mtp_in:-0})${NC}  ↑ ${CYAN}$(format_bytes ${_mtp_out:-0})${NC}"
+                    echo -e "  Port:        ${CYAN}${MTPROXY_PORT}${NC}"
+                    echo -e "  FakeTLS:     ${CYAN}${MTPROXY_DOMAIN}${NC}"
+                    echo -e "  Max Conns:   ${CYAN}${MTPROXY_CONCURRENCY:-8192}${NC}"
+                    if [ -n "$MTPROXY_BLOCKLIST_COUNTRIES" ]; then
+                        echo -e "  Geo-Block:   ${YELLOW}${MTPROXY_BLOCKLIST_COUNTRIES}${NC}"
+                    else
+                        echo -e "  Geo-Block:   ${DIM}None${NC}"
+                    fi
+                    echo -e "  CPU/RAM:     ${CYAN}${MTPROXY_CPUS:-0.5}${NC} / ${CYAN}${MTPROXY_MEMORY:-128m}${NC}"
+                    echo ""
+                    echo -e "    1. Show proxy link & QR code"
+                    echo -e "    2. Restart MTProxy"
+                    echo -e "    3. Stop MTProxy"
+                    echo -e "    4. Disable MTProxy"
+                    echo -e "    5. Change settings (port/domain/resources)"
+                    echo -e "    6. Regenerate secret"
+                    echo -e "    7. Security settings (connection limit, geo-block)"
+                    echo -e "    ${RED}8. Remove MTProxy (stop, remove container & image)${NC}"
+                    if [ "$TELEGRAM_ENABLED" = "true" ]; then
+                        echo -e "    9. 📱 Send link via Telegram"
+                    fi
+                    echo -e "    0. Back"
+                    read -p "  choice: " mtp_choice < /dev/tty || true
+                    case "${mtp_choice:-0}" in
+                        1)
+                            echo ""
+                            show_mtproxy_qr
+                            echo ""
+                            echo -e "  ${BOLD}tg:// link (for sharing):${NC}"
+                            echo -e "  ${CYAN}$(get_mtproxy_link)${NC}"
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            echo ""
+                            ;;
+                        2) restart_mtproxy_container ;;
+                        3)
+                            stop_mtproxy_container
+                            log_warn "MTProxy stopped but still enabled. It will restart on next 'torware start'. Use option 4 to disable permanently."
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            echo ""
+                            ;;
+                        4)
+                            MTPROXY_ENABLED="false"
+                            stop_mtproxy_container
+                            save_settings
+                            log_success "MTProxy disabled"
+                            ;;
+                        5)
+                            echo ""
+                            echo -e "  ${BOLD}MTProxy Settings${NC}"
+                            echo ""
+                            local _mtp_old_port="$MTPROXY_PORT"
+                            echo -e "  ${DIM}Note: MTProxy uses host networking. Choose an available port.${NC}"
+                            echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
+                            read -p "    Port [${MTPROXY_PORT}]: " _mtp_port < /dev/tty || true
+                            if [ -n "$_mtp_port" ]; then
+                                if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
+                                    # Check if port is available
+                                    if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
+                                        log_warn "Port ${_mtp_port} is already in use. Please choose another port."
+                                    else
+                                        MTPROXY_PORT="$_mtp_port"
+                                    fi
+                                else
+                                    log_warn "Invalid port"
+                                fi
+                            fi
+                            echo ""
+                            echo -e "  ${DIM}FakeTLS domain (traffic disguised as HTTPS to this domain):${NC}"
+                            echo -e "  ${DIM}  1. cloudflare.com${NC}"
+                            echo -e "  ${DIM}  2. google.com${NC}"
+                            echo -e "  ${DIM}  3. Keep current (${MTPROXY_DOMAIN})${NC}"
+                            echo -e "  ${DIM}  4. Custom domain${NC}"
+                            read -p "    Domain choice [3]: " _mtp_dom < /dev/tty || true
+                            case "${_mtp_dom:-3}" in
+                                1) MTPROXY_DOMAIN="cloudflare.com"; MTPROXY_SECRET="" ;;
+                                2) MTPROXY_DOMAIN="google.com"; MTPROXY_SECRET="" ;;
+                                4)
+                                    read -p "    Enter domain: " _mtp_cdom < /dev/tty || true
+                                    if [ -n "$_mtp_cdom" ]; then
+                                        MTPROXY_DOMAIN="$_mtp_cdom"
+                                        MTPROXY_SECRET=""
+                                    fi
+                                    ;;
+                            esac
+                            echo ""
+                            read -p "    CPU cores [${MTPROXY_CPUS:-0.5}]: " _mtp_cpu < /dev/tty || true
+                            read -p "    RAM limit [${MTPROXY_MEMORY:-128m}]: " _mtp_mem < /dev/tty || true
+                            if [ -n "$_mtp_cpu" ]; then
+                                [[ "$_mtp_cpu" =~ ^[0-9]+\.?[0-9]*$ ]] && MTPROXY_CPUS="$_mtp_cpu" || log_warn "Invalid CPU"
+                            fi
+                            if [ -n "$_mtp_mem" ]; then
+                                [[ "$_mtp_mem" =~ ^[0-9]+[mMgG]$ ]] && MTPROXY_MEMORY="$(echo "$_mtp_mem" | tr '[:upper:]' '[:lower:]')" || log_warn "Invalid RAM"
+                            fi
+                            save_settings
+                            log_success "MTProxy settings updated"
+                            # Warn if port changed - URL will be different
+                            if [ "$MTPROXY_PORT" != "$_mtp_old_port" ]; then
+                                echo ""
+                                log_warn "Port changed from ${_mtp_old_port} to ${MTPROXY_PORT}"
+                                log_warn "The proxy URL has changed! Old links will no longer work."
+                                echo -e "  ${DIM}Users will need the new link to connect.${NC}"
+                            fi
+                            echo ""
+                            read -p "  Restart MTProxy to apply? [Y/n] " _mtp_rs < /dev/tty || true
+                            if [[ ! "$_mtp_rs" =~ ^[Nn]$ ]]; then
+                                restart_mtproxy_container
+                                # If port changed and Telegram enabled, offer to send new link
+                                if [ "$MTPROXY_PORT" != "$_mtp_old_port" ] && [ "$TELEGRAM_ENABLED" = "true" ]; then
+                                    echo ""
+                                    read -p "  Send new proxy link to Telegram? [Y/n] " _mtp_tg < /dev/tty || true
+                                    if [[ ! "$_mtp_tg" =~ ^[Nn]$ ]]; then
+                                        telegram_notify_mtproxy_started
+                                        log_success "New proxy link sent to Telegram"
+                                    fi
+                                fi
+                            fi
+                            ;;
+                        6)
+                            echo ""
+                            read -p "  Regenerate secret? Old links will stop working. [y/N] " _mtp_regen < /dev/tty || true
+                            if [[ "$_mtp_regen" =~ ^[Yy]$ ]]; then
+                                MTPROXY_SECRET=""
+                                save_settings
+                                restart_mtproxy_container
+                                log_success "New secret generated"
+                                # Offer to send new link via Telegram
+                                if [ "$TELEGRAM_ENABLED" = "true" ]; then
+                                    echo ""
+                                    read -p "  Send new proxy link to Telegram? [Y/n] " _mtp_tg < /dev/tty || true
+                                    if [[ ! "$_mtp_tg" =~ ^[Nn]$ ]]; then
+                                        telegram_notify_mtproxy_started
+                                        log_success "New proxy link sent to Telegram"
+                                    fi
+                                fi
+                            fi
+                            ;;
+                        7)
+                            echo ""
+                            echo -e "  ${BOLD}Security Settings${NC}"
+                            echo ""
+                            echo -e "  ${DIM}Max concurrent connections (default: 8192):${NC}"
+                            read -p "    Max connections [${MTPROXY_CONCURRENCY:-8192}]: " _mtp_conc < /dev/tty || true
+                            if [ -n "$_mtp_conc" ]; then
+                                [[ "$_mtp_conc" =~ ^[0-9]+$ ]] && MTPROXY_CONCURRENCY="$_mtp_conc" || log_warn "Invalid number"
+                            fi
+                            echo ""
+                            echo -e "  ${BOLD}Geo-blocking (block connections from specific countries)${NC}"
+                            echo -e "  ${DIM}Block countries that don't need censorship circumvention${NC}"
+                            echo -e "  ${DIM}(reduces abuse from data centers in open-internet regions)${NC}"
+                            echo ""
+                            if [ -n "$MTPROXY_BLOCKLIST_COUNTRIES" ]; then
+                                echo -e "  Current blocklist: ${YELLOW}$MTPROXY_BLOCKLIST_COUNTRIES${NC}"
+                            else
+                                echo -e "  Current blocklist: ${GREEN}None (all allowed)${NC}"
+                            fi
+                            echo ""
+                            echo -e "  ${DIM}Available countries to block:${NC}"
+                            echo -e "    ${GREEN}1.${NC} US - United States"
+                            echo -e "    ${GREEN}2.${NC} DE - Germany"
+                            echo -e "    ${GREEN}3.${NC} NL - Netherlands"
+                            echo -e "    ${GREEN}4.${NC} FR - France"
+                            echo -e "    ${GREEN}5.${NC} GB - United Kingdom"
+                            echo -e "    ${GREEN}6.${NC} SG - Singapore"
+                            echo -e "    ${GREEN}7.${NC} JP - Japan"
+                            echo -e "    ${GREEN}8.${NC} CA - Canada"
+                            echo -e "    ${GREEN}9.${NC} AU - Australia"
+                            echo -e "   ${GREEN}10.${NC} KR - South Korea"
+                            echo -e "   ${GREEN}11.${NC} CN - China"
+                            echo -e "   ${GREEN}12.${NC} RU - Russia"
+                            echo ""
+                            echo -e "  ${DIM}Enter numbers separated by commas (e.g., 1,2,3) or 'clear' to disable${NC}"
+                            read -p "    Select countries to block: " _mtp_block_sel < /dev/tty || true
+                            if [ -n "$_mtp_block_sel" ]; then
+                                if [ "$_mtp_block_sel" = "clear" ] || [ "$_mtp_block_sel" = "none" ] || [ "$_mtp_block_sel" = "0" ]; then
+                                    MTPROXY_BLOCKLIST_COUNTRIES=""
+                                    log_info "Geo-blocking disabled"
+                                else
+                                    # Map numbers to country codes
+                                    local _geo_codes=""
+                                    local _geo_map=("" "US" "DE" "NL" "FR" "GB" "SG" "JP" "CA" "AU" "KR" "CN" "RU")
+                                    for _num in $(echo "$_mtp_block_sel" | tr ',' ' '); do
+                                        if [[ "$_num" =~ ^[0-9]+$ ]] && [ "$_num" -ge 1 ] && [ "$_num" -le 12 ]; then
+                                            [ -n "$_geo_codes" ] && _geo_codes+=","
+                                            _geo_codes+="${_geo_map[$_num]}"
+                                        fi
+                                    done
+                                    if [ -n "$_geo_codes" ]; then
+                                        MTPROXY_BLOCKLIST_COUNTRIES="$_geo_codes"
+                                        log_info "Will block: $_geo_codes"
+                                    fi
+                                fi
+                            fi
+                            save_settings
+                            log_success "Security settings updated"
+                            echo ""
+                            read -p "  Restart MTProxy to apply? [Y/n] " _mtp_sec_rs < /dev/tty || true
+                            if [[ ! "$_mtp_sec_rs" =~ ^[Nn]$ ]]; then
+                                restart_mtproxy_container
+                            fi
+                            ;;
+                        8)
+                            echo ""
+                            read -p "  Are you sure? This will remove the container and image. [y/N] " _mtp_rm < /dev/tty || true
+                            if [[ "$_mtp_rm" =~ ^[Yy]$ ]]; then
+                                MTPROXY_ENABLED="false"
+                                stop_mtproxy_container
+                                docker rm -f "$MTPROXY_CONTAINER" 2>/dev/null || true
+                                docker rmi "$MTPROXY_IMAGE" 2>/dev/null || true
+                                rm -rf "$INSTALL_DIR/mtproxy" 2>/dev/null || true
+                                MTPROXY_SECRET=""
+                                save_settings
+                                log_success "MTProxy fully removed"
+                            else
+                                log_info "Cancelled"
+                            fi
+                            ;;
+                        9)
+                            echo ""
+                            if [ "$TELEGRAM_ENABLED" != "true" ]; then
+                                log_warn "Telegram bot is not enabled."
+                                echo -e "  ${DIM}Enable Telegram notifications first from the main menu.${NC}"
+                            elif ! is_mtproxy_running; then
+                                log_warn "MTProxy is not running. Start it first."
+                            else
+                                echo -ne "  Sending link & QR to Telegram... "
+                                if telegram_notify_mtproxy_started; then
+                                    echo -e "${GREEN}✓ Sent!${NC}"
+                                else
+                                    echo -e "${RED}✗ Failed${NC}"
+                                fi
+                            fi
+                            read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+                            ;;
+                    esac
+                else
+                    echo ""
+                    echo -e "  ${BOLD}📱 MTProxy (Telegram Proxy)${NC}"
+                    echo ""
+                    echo -e "  Run a proxy that helps censored users access Telegram."
+                    echo -e "  Uses FakeTLS to disguise traffic as normal HTTPS."
+                    echo -e "  Very lightweight (~50MB RAM). Share link/QR with users."
+                    echo ""
+                    read -p "  Enable MTProxy? [y/N] " mtp_en < /dev/tty || true
+                    if [[ "$mtp_en" =~ ^[Yy]$ ]]; then
+                        MTPROXY_ENABLED="true"
+                        echo ""
+                        echo -e "  ${DIM}FakeTLS domain (traffic disguised as HTTPS to this domain):${NC}"
+                        echo -e "  ${DIM}  1. cloudflare.com (recommended)${NC}"
+                        echo -e "  ${DIM}  2. google.com${NC}"
+                        echo -e "  ${DIM}  3. Custom domain${NC}"
+                        read -p "  Domain choice [1]: " _mtp_dom < /dev/tty || true
+                        case "${_mtp_dom:-1}" in
+                            2) MTPROXY_DOMAIN="google.com" ;;
+                            3)
+                                read -p "  Enter domain: " _mtp_cdom < /dev/tty || true
+                                MTPROXY_DOMAIN="${_mtp_cdom:-cloudflare.com}"
+                                ;;
+                            *) MTPROXY_DOMAIN="cloudflare.com" ;;
+                        esac
+                        echo ""
+                        echo -e "  ${DIM}MTProxy uses host networking. Choose an available port.${NC}"
+                        echo -e "  ${DIM}Common choices: 443, 8443, 8080, 9443${NC}"
+                        read -p "  Port [8443]: " _mtp_port < /dev/tty || true
+                        _mtp_port="${_mtp_port:-8443}"
+                        if [[ "$_mtp_port" =~ ^[0-9]+$ ]]; then
+                            if ss -tln 2>/dev/null | grep -q ":${_mtp_port} " || netstat -tln 2>/dev/null | grep -q ":${_mtp_port} "; then
+                                log_warn "Port ${_mtp_port} appears to be in use. Trying anyway..."
+                            fi
+                            MTPROXY_PORT="$_mtp_port"
+                        else
+                            MTPROXY_PORT=8443
+                        fi
+                        MTPROXY_SECRET=""
+                        save_settings
+                        run_mtproxy_container
+                    fi
+                fi
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty
+}
+
+#═══════════════════════════════════════════════════════════════════════
 # CLI Entry Point
 #═══════════════════════════════════════════════════════════════════════
 
@@ -9702,26 +9710,7 @@ cli_main() {
             fi
             ;;
         mtproxy)
-            if [ "$MTPROXY_ENABLED" = "true" ]; then
-                echo -e "  MTProxy (Telegram): ${GREEN}enabled${NC}"
-                if is_mtproxy_running; then
-                    echo -e "  Status: ${GREEN}running${NC}"
-                    local mtp_s=$(get_mtproxy_stats 2>/dev/null)
-                    local mtp_in=$(echo "$mtp_s" | awk '{print $1}')
-                    local mtp_out=$(echo "$mtp_s" | awk '{print $2}')
-                    echo -e "  Traffic: ↓ $(format_bytes ${mtp_in:-0})  ↑ $(format_bytes ${mtp_out:-0})"
-                    echo -e "  Port: ${MTPROXY_PORT}  |  Domain: ${MTPROXY_DOMAIN}"
-                    echo ""
-                    echo -e "  Proxy link:"
-                    get_mtproxy_link_https
-                else
-                    echo -e "  Status: ${RED}stopped${NC}"
-                    echo -e "  Run 'torware start' to start all containers"
-                fi
-            else
-                echo -e "  MTProxy (Telegram): ${DIM}disabled${NC}"
-                echo -e "  Enable via 'torware menu' > MTProxy option"
-            fi
+            show_mtproxy_menu
             ;;
         version|--version|-v)
             show_version
