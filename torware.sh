@@ -7741,6 +7741,15 @@ uninstall() {
     echo ""
     log_info "Uninstalling Torware..."
 
+    # Detect systemd if not already set (cli_main skips detect_os)
+    if [ -z "$HAS_SYSTEMD" ]; then
+        if command -v systemctl &>/dev/null && [ -d /run/systemd/system ]; then
+            HAS_SYSTEMD=true
+        else
+            HAS_SYSTEMD=false
+        fi
+    fi
+
     # Stop services
     if [ "$HAS_SYSTEMD" = "true" ]; then
         systemctl stop torware 2>/dev/null || true
@@ -7764,6 +7773,10 @@ uninstall() {
         fi
         rm -f /etc/init.d/torware
     fi
+
+    # Kill any lingering service processes
+    pkill -f "torware-tracker.sh" 2>/dev/null || true
+    pkill -f "torware-telegram.sh" 2>/dev/null || true
 
     # Stop and remove containers (always check 1-5 to catch orphaned containers)
     for i in $(seq 1 5); do
