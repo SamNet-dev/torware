@@ -426,3 +426,9 @@ curl -sL https://raw.githubusercontent.com/SamNet-dev/torware/main/torware.sh | 
 این پروژه تحت مجوز MIT منتشر شده است. فایل [LICENSE](LICENSE) را ببینید.
 
 </div>
+## 💖 Support
+
+If this project helps you, consider supporting continued development:
+
+**[samnet.dev/donate](https://www.samnet.dev/donate/)**
+
