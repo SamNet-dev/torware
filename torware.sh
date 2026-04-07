@@ -994,6 +994,10 @@ generate_torrc() {
         bw_burst=$(awk -v b="$bw" 'BEGIN {printf "%.0f", b * 250000}')
     fi
 
+    # Detect public IP for Address directive (critical for NAT/cloud providers)
+    local public_ip
+    public_ip=$(get_public_ip)
+
     local torrc_file="$torrc_dir/torrc"
 
     cat > "$torrc_file" << EOF
@@ -1004,6 +1008,14 @@ generate_torrc() {
 # Identity
 Nickname ${nick}
 ContactInfo "${safe_contact}"
+EOF
+
+    # Set Address directive so Tor knows its public IP (required on NAT/cloud)
+    if [ -n "$public_ip" ]; then
+        echo "Address ${public_ip}" >> "$torrc_file"
+    fi
+
+    cat >> "$torrc_file" << EOF
 
 # Network Ports
 ORPort ${orport}
@@ -2487,12 +2499,20 @@ run_relay_container() {
         bw_bytes=$(awk -v b="$bw" 'BEGIN {printf "%.0f", b * 125000}')
     fi
 
+    # Detect public IP for Address directive (critical for NAT/cloud providers)
+    local public_ip
+    public_ip=$(get_public_ip)
+
     if [ "$rtype" = "bridge" ]; then
         # For the official bridge image, use environment variables
         # Enable ControlPort via OBFS4V_ env vars for monitoring
         local bw_env=()
         if [ -n "$bw_bytes" ]; then
             bw_env=(-e "OBFS4V_BandwidthRate=${bw_bytes}" -e "OBFS4V_BandwidthBurst=$((bw_bytes * 2))")
+        fi
+        local addr_env=()
+        if [ -n "$public_ip" ]; then
+            addr_env=(-e "OBFS4V_Address=${public_ip}")
         fi
         # NOTE: --network host is required for Tor relays: ORPort must bind directly on the
         # host interface, and ControlPort cookie auth requires shared localhost access.
@@ -2516,6 +2536,7 @@ run_relay_container() {
             --health-retries=3 \
             --health-start-period=120s \
             "${bw_env[@]}" \
+            "${addr_env[@]}" \
             "${resource_args[@]}" \
             "$image"; then
             log_error "Failed to start $cname (bridge)"
