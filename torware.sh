@@ -55,7 +55,7 @@ trap '_cleanup_tmp' EXIT
 VERSION="1.1"
 # Docker image tags — pinned to specific versions for reproducibility. Use :latest for auto-updates.
 BRIDGE_IMAGE="thetorproject/obfs4-bridge:0.24"
-RELAY_IMAGE="osminogin/tor-simple:0.4.8.10"
+RELAY_IMAGE="osminogin/tor-simple:0.4.9.5"
 SNOWFLAKE_IMAGE="thetorproject/snowflake-proxy:latest"
 INSTALL_DIR="${INSTALL_DIR:-/opt/torware}"
 
@@ -9804,7 +9804,41 @@ main() {
                 echo ""
                 log_info "Updating Torware script..."
                 create_management_script
-                log_success "Torware updated. Your containers and settings are unchanged."
+                log_success "Torware script updated."
+                echo ""
+                # Update Docker images for running relay containers
+                load_settings 2>/dev/null || true
+                local _updated_images=0
+                local _needs_restart=""
+                for _ui in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                    local _uimg=$(get_docker_image $_ui)
+                    local _ucname=$(get_container_name $_ui)
+                    log_info "Pulling latest image for container $_ui (${_uimg})..."
+                    if docker pull "$_uimg" 2>/dev/null | grep -q "Downloaded newer image\|Pull complete"; then
+                        _updated_images=$((_updated_images + 1))
+                        _needs_restart="${_needs_restart} ${_ui}"
+                    fi
+                done
+                # Pull Snowflake image if enabled
+                if [ "${SNOWFLAKE_ENABLED:-false}" = "true" ]; then
+                    log_info "Pulling latest Snowflake image..."
+                    docker pull "$SNOWFLAKE_IMAGE" 2>/dev/null || true
+                fi
+                if [ "$_updated_images" -gt 0 ]; then
+                    echo ""
+                    log_success "New Docker images pulled. Recreating containers..."
+                    for _ri in $_needs_restart; do
+                        local _rcname=$(get_container_name $_ri)
+                        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${_rcname}$"; then
+                            docker stop --timeout 30 "$_rcname" 2>/dev/null || true
+                            docker rm "$_rcname" 2>/dev/null || true
+                            run_relay_container $_ri
+                            log_success "Container $_ri (${_rcname}) recreated with new image."
+                        fi
+                    done
+                else
+                    log_success "Docker images are already up to date."
+                fi
                 echo ""
                 echo -e "  ${DIM}New features available in the management menu.${NC}"
                 echo ""
