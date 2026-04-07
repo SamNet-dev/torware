@@ -6357,16 +6357,23 @@ telegram_generate_notify_script() {
 INSTALL_DIR="REPLACE_INSTALL_DIR"
 
 # Safe settings load with whitelist validation
+_settings_loaded=false
 if [ -f "$INSTALL_DIR/settings.conf" ]; then
     if ! grep -vE '^\s*$|^\s*#|^[A-Za-z_][A-Za-z0-9_]*='\''[^'\'']*'\''$|^[A-Za-z_][A-Za-z0-9_]*=[0-9]+$|^[A-Za-z_][A-Za-z0-9_]*=(true|false)$' "$INSTALL_DIR/settings.conf" 2>/dev/null | grep -q .; then
         source "$INSTALL_DIR/settings.conf"
+        _settings_loaded=true
+    else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: settings.conf failed validation, cannot load" >&2
     fi
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: settings.conf not found at $INSTALL_DIR" >&2
 fi
 
-# Exit if not configured
-[ "$TELEGRAM_ENABLED" != "true" ] && exit 0
-[ -z "$TELEGRAM_BOT_TOKEN" ] && exit 0
-[ -z "$TELEGRAM_CHAT_ID" ] && exit 0
+# Exit if not configured (exit 1 so systemd restarts us)
+if [ "$TELEGRAM_ENABLED" != "true" ] || [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Telegram not configured (enabled=$TELEGRAM_ENABLED, token=${TELEGRAM_BOT_TOKEN:+set}, chat=${TELEGRAM_CHAT_ID:+set})" >&2
+    [ "$_settings_loaded" = "true" ] && exit 0 || exit 1
+fi
 
 # Cache server IP once at startup
 _server_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
@@ -6494,6 +6501,35 @@ get_cpu_cores() {
     fi
     [ "$cores" -lt 1 ] 2>/dev/null && cores=1
     echo "$cores"
+}
+
+get_container_controlport() {
+    local idx=${1:-1}
+    echo $((${CONTROLPORT_BASE:-9051} + idx - 1))
+}
+
+tg_log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2
+}
+
+# Query ControlPort with cookie authentication
+controlport_query() {
+    local cname=$1
+    local port=$2
+    shift 2
+    # Read cookie from inside the container
+    local cookie
+    cookie=$(timeout 5 docker exec "$cname" sh -c \
+        'od -A n -t x1 /var/lib/tor/control_auth_cookie 2>/dev/null | tr -d " \n"' 2>/dev/null)
+    [ -z "$cookie" ] && return 1
+    # Build and send the query
+    {
+        printf 'AUTHENTICATE %s\r\n' "$cookie"
+        for cmd in "$@"; do
+            printf '%s\r\n' "$cmd"
+        done
+        printf 'QUIT\r\n'
+    } | timeout 5 docker exec -i "$cname" sh -c "nc 127.0.0.1 $port" 2>/dev/null | tr -d '\r'
 }
 
 track_uptime() {
@@ -6767,7 +6803,10 @@ No Torware containers are running!"
     local total_circuits=0
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
         local cname=$(get_container_name $i)
-        local circ=$(timeout 5 docker exec "$cname" sh -c 'echo "GETINFO circuit-status" | nc 127.0.0.1 9051 2>/dev/null | grep -c BUILT' 2>/dev/null || echo 0)
+        local cport=$(get_container_controlport $i)
+        local circ_out
+        circ_out=$(controlport_query "$cname" "$cport" "GETINFO circuit-status" 2>/dev/null) || true
+        local circ=$(echo "$circ_out" | grep -c BUILT 2>/dev/null || echo 0)
         total_circuits=$((total_circuits + ${circ:-0}))
     done
     if [ "$total_circuits" -eq 0 ] 2>/dev/null; then
@@ -6896,20 +6935,23 @@ build_report() {
                     earliest_start=$se
                 fi
             fi
-            # Traffic via ControlPort
-            local cport=$((9051 + i - 1))
-            local cp_out=$(timeout 5 docker exec "$cname" sh -c "printf 'AUTHENTICATE\r\nGETINFO traffic/read\r\nGETINFO traffic/written\r\nQUIT\r\n' | nc 127.0.0.1 9051" 2>/dev/null)
+            # Traffic via ControlPort (with cookie auth)
+            local cport=$(get_container_controlport $i)
+            local cp_out
+            cp_out=$(controlport_query "$cname" "$cport" "GETINFO traffic/read" "GETINFO traffic/written" 2>/dev/null) || true
             local rb=$(echo "$cp_out" | sed -n 's/.*traffic\/read=\([0-9]*\).*/\1/p' | head -1); rb=${rb:-0}
             local wb=$(echo "$cp_out" | sed -n 's/.*traffic\/written=\([0-9]*\).*/\1/p' | head -1); wb=${wb:-0}
             total_read=$((total_read + rb))
             total_written=$((total_written + wb))
             # Circuits
-            local circ_out=$(timeout 5 docker exec "$cname" sh -c "printf 'AUTHENTICATE\r\nGETINFO circuit-status\r\nQUIT\r\n' | nc 127.0.0.1 9051" 2>/dev/null)
+            local circ_out
+            circ_out=$(controlport_query "$cname" "$cport" "GETINFO circuit-status" 2>/dev/null) || true
             local circ=$(echo "$circ_out" | grep -cE '^[0-9]+ (BUILT|EXTENDED|LAUNCHED)' 2>/dev/null || echo 0)
             circ=${circ//[^0-9]/}; circ=${circ:-0}
             total_circuits=$((total_circuits + circ))
             # Connections
-            local conn_out=$(timeout 5 docker exec "$cname" sh -c "printf 'AUTHENTICATE\r\nGETINFO orconn-status\r\nQUIT\r\n' | nc 127.0.0.1 9051" 2>/dev/null)
+            local conn_out
+            conn_out=$(controlport_query "$cname" "$cport" "GETINFO orconn-status" 2>/dev/null) || true
             local conn=$(echo "$conn_out" | grep -c '\$' 2>/dev/null || echo 0)
             conn=${conn//[^0-9]/}; conn=${conn:-0}
             total_conns=$((total_conns + conn))
@@ -7098,7 +7140,10 @@ except Exception:
                 local total_circuits=0
                 for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
                     local cname=$(get_container_name $i)
-                    local circ=$(timeout 5 docker exec "$cname" sh -c 'echo "GETINFO circuit-status" | nc 127.0.0.1 9051 2>/dev/null | grep -c BUILT' 2>/dev/null || echo 0)
+                    local cport=$(get_container_controlport $i)
+                    local circ_out
+                    circ_out=$(controlport_query "$cname" "$cport" "GETINFO circuit-status" 2>/dev/null) || true
+                    local circ=$(echo "$circ_out" | grep -c BUILT 2>/dev/null || echo 0)
                     total_circuits=$((total_circuits + ${circ:-0}))
                 done
                 telegram_send "🔗 Active circuits: ${total_circuits}"
@@ -7137,7 +7182,10 @@ except Exception:
                     if echo "$docker_names" | grep -q "^${cname}$"; then
                         local safe_cname=$(escape_md "$cname")
                         ct_msg+="C${i} (${safe_cname}): 🟢 Running"
-                        local circ=$(timeout 5 docker exec "$cname" sh -c 'echo "GETINFO circuit-status" | nc 127.0.0.1 9051 2>/dev/null | grep -c BUILT' 2>/dev/null || echo 0)
+                        local cport=$(get_container_controlport $i)
+                        local circ_out
+                        circ_out=$(controlport_query "$cname" "$cport" "GETINFO circuit-status" 2>/dev/null) || true
+                        local circ=$(echo "$circ_out" | grep -c BUILT 2>/dev/null || echo 0)
                         ct_msg+="\n  🔗 Circuits: ${circ:-0}"
                     else
                         local safe_cname=$(escape_md "$cname")
@@ -7330,6 +7378,12 @@ last_weekly_ts=$(cat "$_ts_dir/.last_weekly_ts" 2>/dev/null || echo 0)
 last_report_ts=$(cat "$_ts_dir/.last_report_ts" 2>/dev/null || echo 0)
 [ "$last_report_ts" -eq "$last_report_ts" ] 2>/dev/null || last_report_ts=0
 
+# Send startup confirmation
+tg_log "Telegram service started (interval=${TELEGRAM_INTERVAL:-6}h, start_hour=${TELEGRAM_START_HOUR:-0})"
+telegram_send "✅ *Telegram monitoring started*
+📬 Reports every ${TELEGRAM_INTERVAL:-6}h starting at ${TELEGRAM_START_HOUR:-0}:00
+🤖 Send /tor\_help for commands"
+
 while true; do
     sleep 60
 
@@ -7380,6 +7434,7 @@ while true; do
     hour_diff=$(( (current_hour - start_hour + 24) % 24 ))
     if [ "$interval_hours" -gt 0 ] && [ $((hour_diff % interval_hours)) -eq 0 ] 2>/dev/null; then
         if [ $((now_ts - last_report_ts)) -ge $((interval_secs - 120)) ] 2>/dev/null; then
+            tg_log "Sending periodic report (interval=${interval_hours}h, hour=${current_hour})"
             report=$(build_report)
             telegram_send "$report"
             record_snapshot
