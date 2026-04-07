@@ -7033,7 +7033,7 @@ try:
         msg = r.get('message', {})
         chat_id = msg.get('chat', {}).get('id', 0)
         text = msg.get('text', '')
-        if str(chat_id) == '$TELEGRAM_CHAT_ID' and text.startswith('/tor_'):
+        if str(chat_id) == '$TELEGRAM_CHAT_ID' and text.startswith('/'):
             print(f'{uid}|{text}')
         else:
             print(f'{uid}|')
@@ -7055,6 +7055,19 @@ except Exception:
     while IFS='|' read -r uid cmd; do
         [ -z "$uid" ] && continue
         [ "$uid" -gt "$max_id" ] 2>/dev/null && max_id=$uid
+        # Normalize shorthand commands to /tor_ prefix
+        case "$cmd" in
+            /status|/status@*) cmd="/tor_status" ;;
+            /stats|/stats@*) cmd="/tor_status" ;;
+            /start|/start@*) cmd="/tor_help" ;;
+            /help|/help@*) cmd="/tor_help" ;;
+            /peers|/peers@*) cmd="/tor_peers" ;;
+            /uptime|/uptime@*) cmd="/tor_uptime" ;;
+            /containers|/containers@*) cmd="/tor_containers" ;;
+            /snowflake|/snowflake@*) cmd="/tor_snowflake" ;;
+            /unbounded|/unbounded@*) cmd="/tor_unbounded" ;;
+            /mtproxy|/mtproxy@*) cmd="/tor_mtproxy" ;;
+        esac
         case "$cmd" in
             /tor_status|/tor_status@*)
                 local report=$(build_report)
@@ -7261,7 +7274,12 @@ _Use /tor\_mtproxy\_qr to get the proxy link and QR code._"
 /tor\_restart\_N — Restart container N
 /tor\_stop\_N — Stop container N
 /tor\_start\_N — Start container N
-/tor\_help — Show this help"
+/tor\_help — Show this help
+
+_Shortcuts: /status /peers /uptime /containers /help_"
+                ;;
+            /*)
+                telegram_send "❓ Unknown command. Send /tor\_help for available commands."
                 ;;
         esac
     done <<< "$parsed"
